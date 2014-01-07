@@ -82,7 +82,7 @@
             }],
 
             # Compute the architecture that we're building on.
-            ['OS=="win" or OS=="mac" or OS=="ios"', {
+            ['OS=="win" or OS=="mac" or OS=="ios" or OS=="android"', {
               'host_arch%': 'ia32',
             }, {
               # This handles the Unix platforms for which there is some support.
@@ -573,7 +573,8 @@
         # linux_use_gold_flags: whether to use build flags that rely on gold.
         # On by default for x64 Linux.  Temporarily off for ChromeOS as
         # it failed on a buildbot.
-        ['OS=="linux" and target_arch=="x64" and chromeos==0', {
+        #['OS=="linux" and target_arch=="x64" and chromeos==0', {
+        ['OS=="linux" and target_arch!="ia32" and chromeos==0', {
           'linux_use_gold_flags%': 1,
         }, {
           'linux_use_gold_flags%': 0,
@@ -1178,19 +1179,22 @@
              # Unfortuantely we have to use absolute paths to the SDK/NDK beause
              # they're passed to ant which uses a different relative path from
              # gyp.
-             'android_ndk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/ndk/',
-             'android_sdk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/sdk/',
-             'android_host_arch%': '<!(uname -m)',
+             #'android_ndk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/ndk/',
+             #'android_sdk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/sdk/',
+             #'android_host_arch%': '<!(uname -m)',
+	         'android_host_arch%': 'x86',
              # Android API-level of the SDK used for compilation.
-             'android_sdk_version%': '17',
+             #'android_sdk_version%': '17',
+	        'android_sdk_version%': '9',
           },
           # Copy conditionally-set variables out one scope.
           'android_ndk_root%': '<(android_ndk_root)',
-          'android_sdk_root%': '<(android_sdk_root)',
+          #'android_sdk_root%': '<(android_sdk_root)',
           'android_sdk_version%': '<(android_sdk_version)',
           'android_stlport_root': '<(android_ndk_root)/sources/cxx-stl/stlport',
+          'android_gnustl_root': '<(android_ndk_root)/sources/cxx-stl/gnu-libstdc++/4.4.3',
 
-          'android_sdk%': '<(android_sdk_root)/platforms/android-<(android_sdk_version)',
+          #'android_sdk%': '<(android_sdk_root)/platforms/android-<(android_sdk_version)',
 
           # Android API level 14 is ICS (Android 4.0) which is the minimum
           # platform requirement for Chrome on Android, we use it for native
@@ -1211,8 +1215,9 @@
                 }],
               ],
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-arm/gdbserver/gdbserver',
-              'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-arm',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.6/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              #'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-arm',
+	          'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-9/arch-arm',
+             'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.4.3/prebuilt/<(host_os)-<(android_host_arch)/bin',
             }],
             ['target_arch == "mipsel"', {
               'android_app_abi%': 'mips',
@@ -1227,19 +1232,24 @@
         'android_gdbserver%': '<(android_gdbserver)',
         'android_ndk_root%': '<(android_ndk_root)',
         'android_ndk_sysroot': '<(android_ndk_sysroot)',
-        'android_sdk_root%': '<(android_sdk_root)',
+        #'android_sdk_root%': '<(android_sdk_root)',
         'android_sdk_version%': '<(android_sdk_version)',
         'android_toolchain%': '<(android_toolchain)',
 
         'android_ndk_include': '<(android_ndk_sysroot)/usr/include',
         'android_ndk_lib': '<(android_ndk_sysroot)/usr/lib',
-        'android_sdk_tools%': '<(android_sdk_root)/platform-tools',
-        'android_sdk%': '<(android_sdk)',
-        'android_sdk_jar%': '<(android_sdk)/android.jar',
+        #'android_sdk_tools%': '<(android_sdk_root)/platform-tools',
+        #'android_sdk%': '<(android_sdk)',
+        #'android_sdk_jar%': '<(android_sdk)/android.jar',
 
         'android_stlport_root': '<(android_stlport_root)',
         'android_stlport_include': '<(android_stlport_root)/stlport',
         'android_stlport_libs_dir': '<(android_stlport_root)/libs/<(android_app_abi)',
+
+        'android_gnustl_root': '<(android_gnustl_root)',
+        'android_gnustl_include': '<(android_gnustl_root)/include',
+	    'android_gnustl_lib_include': '<(android_gnustl_root)/libs/<(android_app_abi)/include',
+        'android_gnustl_libs_dir': '<(android_gnustl_root)/libs/<(android_app_abi)',
 
         # Location of the "strip" binary, used by both gyp and scripts.
         'android_strip%' : '<!(/bin/echo -n <(android_toolchain)/*-strip)',
@@ -3327,13 +3337,16 @@
           # Figure this out early since it needs symbols from libgcc.a, so it
           # has to be before that in the set of libraries.
           ['use_system_stlport==1', {
-            'android_stlport_library': 'stlport',
+            #'android_stlport_library': 'stlport',
+	        'android_stlport_library': 'gnustl',
           }, {
             'conditions': [
               ['component=="shared_library"', {
-                  'android_stlport_library': 'stlport_shared',
+                  #'android_stlport_library': 'stlport_shared',
+ 		          'android_stlport_library': 'gnustl_shared',
               }, {
-                  'android_stlport_library': 'stlport_static',
+                  #'android_stlport_library': 'stlport_static',
+		          'android_stlport_library': 'gnustl_static',
               }],
             ],
           }],
@@ -3560,10 +3573,13 @@
                 ],
               }, { # else: use_system_stlport!=1
                 'cflags': [
-                  '-I<(android_stlport_include)',
+                  #'-I<(android_stlport_include)',
+		          '-I<(android_gnustl_include)',
+		          '-I<(android_gnustl_lib_include)',
                 ],
                 'ldflags': [
-                  '-L<(android_stlport_libs_dir)',
+                  #'-L<(android_stlport_libs_dir)',
+		          '-L<(android_gnustl_libs_dir)',
                 ],
               }],
               ['target_arch=="ia32"', {
