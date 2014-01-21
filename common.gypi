@@ -1181,8 +1181,8 @@
              # gyp.
              #'android_ndk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/ndk/',
              #'android_sdk_root%': '<!(cd <(DEPTH) && pwd -P)/third_party/android_tools/sdk/',
-             #'android_host_arch%': '<!(uname -m)',
-	         'android_host_arch%': 'x86',
+             'android_host_arch%': '<!(uname -m)',
+	     #'android_host_arch%': 'x86',
              # Android API-level of the SDK used for compilation.
              #'android_sdk_version%': '17',
 	        'android_sdk_version%': '9',
