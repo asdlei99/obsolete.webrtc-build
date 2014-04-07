@@ -8,25 +8,28 @@
 
 """
 
-import json
 import optparse
 import os
 import sys
 
-from util import build_utils
-from util import md5_check
-
-BUILD_ANDROID_DIR = os.path.join(os.path.dirname(__file__), '..')
+BUILD_ANDROID_DIR = os.path.join(os.path.dirname(__file__), os.pardir)
 sys.path.append(BUILD_ANDROID_DIR)
 
-from pylib import android_commands
+from pylib import constants
 
+from util import build_device
+from util import build_utils
+from util import md5_check
 
 def DoPush(options):
   libraries = build_utils.ReadJson(options.libraries_json)
 
-  adb = android_commands.AndroidCommands()
-  serial_number = adb.Adb().GetSerialNumber()
+  device = build_device.GetBuildDeviceFromPath(
+      options.build_device_configuration)
+  if not device:
+    return
+
+  serial_number = device.GetSerialNumber()
   # A list so that it is modifiable in Push below.
   needs_directory = [True]
   for lib in libraries:
@@ -35,9 +38,9 @@ def DoPush(options):
 
     def Push():
       if needs_directory:
-        adb.RunShellCommand('mkdir -p ' + options.device_dir)
+        device.RunShellCommand('mkdir -p ' + options.device_dir)
         needs_directory[:] = [] # = False
-      adb.PushIfNeeded(host_path, device_path)
+      device.PushIfNeeded(host_path, device_path)
 
     record_path = '%s.%s.push.md5.stamp' % (host_path, serial_number)
     md5_check.CallAndRecordIfStale(
@@ -47,12 +50,7 @@ def DoPush(options):
         input_strings=[device_path])
 
 
-def main(argv):
-  if not build_utils.IsDeviceReady():
-    build_utils.PrintBigWarning(
-        'Zero (or multiple) devices attached. Skipping native library push.')
-    return
-
+def main():
   parser = optparse.OptionParser()
   parser.add_option('--libraries-dir',
       help='Directory that contains stripped libraries.')
@@ -61,10 +59,15 @@ def main(argv):
   parser.add_option('--libraries-json',
       help='Path to the json list of native libraries.')
   parser.add_option('--stamp', help='Path to touch on success.')
+  parser.add_option('--build-device-configuration',
+      help='Path to build device configuration.')
+  parser.add_option('--configuration-name',
+      help='The build CONFIGURATION_NAME')
   options, _ = parser.parse_args()
 
   required_options = ['libraries_dir', 'device_dir', 'libraries_json']
   build_utils.CheckOptions(options, parser, required=required_options)
+  constants.SetBuildType(options.configuration_name)
 
   DoPush(options)
 
@@ -73,4 +76,4 @@ def main(argv):
 
 
 if __name__ == '__main__':
-  sys.exit(main(sys.argv))
+  sys.exit(main())

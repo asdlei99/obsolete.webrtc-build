@@ -10,13 +10,10 @@
 #  python_arch.sh /path/to/sysroot/usr/lib/libpython2.4.so.1.0
 #
 
-python=$(readlink -f "$1")
-if [ ! -r "$python" ]; then
-  echo unknown
-  exit 0
-fi
-file_out=$(file "$python")
-if [ $? -ne 0 ]; then
+file_out=$(file --dereference "$1")
+# The POSIX spec says that `file` should not exit(1) if the file does not
+# exist, so do our own -e check to catch things.
+if [ $? -ne 0 ] || [ ! -e "$1" ] ; then
   echo unknown
   exit 0
 fi

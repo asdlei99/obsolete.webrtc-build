@@ -13,7 +13,8 @@ import optparse
 import sys
 import time
 
-from pylib import android_commands, surface_stats_collector
+from pylib import android_commands
+from pylib.perf import surface_stats_collector
 from pylib.utils import run_tests_helper
 
 
@@ -29,7 +30,8 @@ _FIELD_FORMAT = {
 def _MergeResults(results, fields):
   merged_results = collections.defaultdict(list)
   for result in results:
-    if fields != ['all'] and not result.name in fields:
+    if ((fields != ['all'] and not result.name in fields) or
+        result.value is None):
       continue
     name = '%s (%s)' % (result.name, result.unit)
     if isinstance(result.value, list):
@@ -93,7 +95,7 @@ def main(argv):
                     type='float',
                     help='Time in seconds to sleep between updates.')
 
-  options, args = parser.parse_args(argv)
+  options, _ = parser.parse_args(argv)
   run_tests_helper.SetLogLevel(options.verbose_count)
 
   adb = android_commands.AndroidCommands(options.device)

@@ -24,7 +24,6 @@ Run
 
 """
 
-import optparse
 import os
 import sys
 
@@ -32,14 +31,14 @@ from pylib import constants
 from pylib.utils import findbugs
 
 
-def main(argv):
+def main():
   parser = findbugs.GetCommonParser()
 
   options, _ = parser.parse_args()
 
   if not options.base_dir:
-    options.base_dir = os.path.join(constants.CHROME_DIR, 'build', 'android',
-                                    'findbugs_filter')
+    options.base_dir = os.path.join(constants.DIR_SOURCE_ROOT, 'build',
+                                    'android', 'findbugs_filter')
   if not options.only_analyze:
     options.only_analyze = 'org.chromium.-'
 
@@ -47,4 +46,4 @@ def main(argv):
 
 
 if __name__ == '__main__':
-  sys.exit(main(sys.argv))
+  sys.exit(main())

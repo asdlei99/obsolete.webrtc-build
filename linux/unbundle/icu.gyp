@@ -5,40 +5,52 @@
 {
   'targets': [
     {
-      'target_name': 'system_icu',
+      'target_name': 'icudata',
       'type': 'none',
       'direct_dependent_settings': {
+        'cflags': [
+          '<!@(pkg-config --cflags icu-uc)',
+        ],
         'defines': [
           'U_USING_ICU_NAMESPACE=0',
         ],
       },
       'link_settings': {
         'ldflags': [
-          '<!@(icu-config --ldflags)',
+          '<!@(pkg-config --libs-only-L --libs-only-other icu-uc)',
         ],
         'libraries': [
-          '<!@(icu-config --ldflags-libsonly)',
+          '<!@(pkg-config --libs-only-l icu-uc)',
         ],
       },
     },
     {
-      'target_name': 'icudata',
-      'type': 'none',
-      'dependencies': ['system_icu'],
-      'export_dependent_settings': ['system_icu'],
-    },
-    {
       'target_name': 'icui18n',
       'type': 'none',
-      'dependencies': ['system_icu'],
-      'export_dependent_settings': ['system_icu'],
+      'toolsets': ['host', 'target'],
+      'direct_dependent_settings': {
+        'cflags': [
+          '<!@(pkg-config --cflags icu-i18n)',
+        ],
+        'defines': [
+          'U_USING_ICU_NAMESPACE=0',
+        ],
+      },
+      'link_settings': {
+        'ldflags': [
+          '<!@(pkg-config --libs-only-L --libs-only-other icu-i18n)',
+        ],
+        'libraries': [
+          '<!@(pkg-config --libs-only-l icu-i18n)',
+        ],
+      },
       'variables': {
-        'headers_root_path': 'public/i18n',
+        'headers_root_path': 'source/i18n',
         'header_filenames': [
           # This list can easily be updated using the command below:
-          # find third_party/icu/public/i18n -iname '*.h' \
+          # find third_party/icu/source/i18n/unicode -iname '*.h' \
           # -printf "'%p',\n" | \
-          # sed -e 's|third_party/icu/public/i18n/||' | sort -u
+          # sed -e 's|third_party/icu/source/i18n/||' | sort -u
           'unicode/basictz.h',
           'unicode/bmsearch.h',
           'unicode/bms.h',
@@ -116,15 +128,30 @@
     {
       'target_name': 'icuuc',
       'type': 'none',
-      'dependencies': ['system_icu'],
-      'export_dependent_settings': ['system_icu'],
+      'toolsets': ['host', 'target'],
+      'direct_dependent_settings': {
+        'cflags': [
+          '<!@(pkg-config --cflags icu-uc)',
+        ],
+        'defines': [
+          'U_USING_ICU_NAMESPACE=0',
+        ],
+      },
+      'link_settings': {
+        'ldflags': [
+          '<!@(pkg-config --libs-only-L --libs-only-other icu-uc)',
+        ],
+        'libraries': [
+          '<!@(pkg-config --libs-only-l icu-uc)',
+        ],
+      },
       'variables': {
-        'headers_root_path': 'public/common',
+        'headers_root_path': 'source/common',
         'header_filenames': [
           # This list can easily be updated using the command below:
-          # find third_party/icu/public/common -iname '*.h' \
+          # find third_party/icu/source/common/unicode -iname '*.h' \
           # -printf "'%p',\n" | \
-          # sed -e 's|third_party/icu/public/common/||' | sort -u
+          # sed -e 's|third_party/icu/source/common/||' | sort -u
           'unicode/brkiter.h',
           'unicode/bytestream.h',
           'unicode/caniter.h',

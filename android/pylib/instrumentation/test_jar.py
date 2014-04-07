@@ -3,16 +3,23 @@
 # found in the LICENSE file.
 
 """Helper class for instrumenation test jar."""
+# pylint: disable=W0702
 
 import collections
 import logging
 import os
 import pickle
 import re
+import sys
 
 from pylib import cmd_helper
 from pylib import constants
 
+sys.path.insert(0,
+                os.path.join(constants.DIR_SOURCE_ROOT,
+                             'build', 'util', 'lib', 'common'))
+
+import unittest_util # pylint: disable=F0401
 
 # If you change the cached output of proguard, increment this number
 PICKLE_FORMAT_VERSION = 1
@@ -21,7 +28,7 @@ PICKLE_FORMAT_VERSION = 1
 class TestJar(object):
   _ANNOTATIONS = frozenset(
       ['Smoke', 'SmallTest', 'MediumTest', 'LargeTest', 'EnormousTest',
-       'FlakyTest', 'DisabledTest', 'Manual', 'PerfTest'])
+       'FlakyTest', 'DisabledTest', 'Manual', 'PerfTest', 'HostDrivenTest'])
   _DEFAULT_ANNOTATION = 'SmallTest'
   _PROGUARD_CLASS_RE = re.compile(r'\s*?- Program class:\s*([\S]+)$')
   _PROGUARD_METHOD_RE = re.compile(r'\s*?- Method:\s*(\S*)[(].*$')
@@ -127,7 +134,8 @@ class TestJar(object):
   def _GetAnnotationMap(self):
     return self._annotation_map
 
-  def _IsTestMethod(self, test):
+  @staticmethod
+  def _IsTestMethod(test):
     class_name, method = test.split('#')
     return class_name.endswith('Test') and method.startswith('test')
 
@@ -137,7 +145,8 @@ class TestJar(object):
       return []
     return self._GetAnnotationMap()[test]
 
-  def _AnnotationsMatchFilters(self, annotation_filter_list, annotations):
+  @staticmethod
+  def _AnnotationsMatchFilters(annotation_filter_list, annotations):
     """Checks if annotations match any of the filters."""
     if not annotation_filter_list:
       return True
@@ -169,12 +178,12 @@ class TestJar(object):
     for test_method in self.GetTestMethods():
       annotations_ = frozenset(self.GetTestAnnotations(test_method))
       if (annotations_.isdisjoint(self._ANNOTATIONS) and
-          not self.IsPythonDrivenTest(test_method)):
+          not self.IsHostDrivenTest(test_method)):
         tests_missing_annotations.append(test_method)
     return sorted(tests_missing_annotations)
 
-  def _GetAllMatchingTests(self, annotation_filter_list,
-                           exclude_annotation_list, test_filter):
+  def GetAllMatchingTests(self, annotation_filter_list,
+                          exclude_annotation_list, test_filter):
     """Get a list of tests matching any of the annotations and the filter.
 
     Args:
@@ -202,19 +211,25 @@ class TestJar(object):
         available_tests = list(set(available_tests) - set(excluded_tests))
     else:
       available_tests = [m for m in self.GetTestMethods()
-                         if not self.IsPythonDrivenTest(m)]
+                         if not self.IsHostDrivenTest(m)]
 
     tests = []
     if test_filter:
       # |available_tests| are in adb instrument format: package.path.class#test.
-      filter_without_hash = test_filter.replace('#', '.')
-      tests = [t for t in available_tests
-               if filter_without_hash in t.replace('#', '.')]
+
+      # Maps a 'class.test' name to each 'package.path.class#test' name.
+      sanitized_test_names = dict([
+          (t.split('.')[-1].replace('#', '.'), t) for t in available_tests])
+      # Filters 'class.test' names and populates |tests| with the corresponding
+      # 'package.path.class#test' names.
+      tests = [
+          sanitized_test_names[t] for t in unittest_util.FilterTestNames(
+              sanitized_test_names.keys(), test_filter.replace('#', '.'))]
     else:
       tests = available_tests
 
     return tests
 
   @staticmethod
-  def IsPythonDrivenTest(test):
+  def IsHostDrivenTest(test):
     return 'pythonDrivenTests' in test

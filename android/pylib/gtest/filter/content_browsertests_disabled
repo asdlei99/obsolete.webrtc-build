@@ -2,15 +2,19 @@
 # Timeouts
 Http/MediaTest.*
 File/MediaTest.*
-ExternalClearKey/EncryptedMediaTest.*
-ClearKey/EncryptedMediaTest.*
 WorkerTest.*
 MediaTest.*
+MediaSourceTest.ConfigChangeVideo
 WebGLConformanceTest.*
 MessagePortTest.Tests
-EncryptedMediaTest.InvalidKeySystem
 CrossPlatformAccessibilityBrowserTest.*
 DatabaseTest.*
+ResourceDispatcherHostBrowserTest.SyncXMLHttpRequest_DuringUnload
+
+# Crashes
+ResourceDispatcherHostBrowserTest.CrossSiteAfterCrash
+RenderFrameHostManagerTest.IgnoreRendererDebugURLsWhenCrashed
+RenderFrameHostManagerTest.ProcessExitWithSwappedOutViews
 
 # Failures
 RenderViewHostTest.BaseURLParam
@@ -18,28 +22,6 @@ OffTheRecordClipboardTest.ClearContentData
 GpuPixelBrowserTest.*
 FileSystemBrowserTestWithLowQuota.QuotaTest
 ChildProcessSecurityPolicyInProcessBrowserTest.NoLeak
-AudioLayoutTest.AudioDataUrl
-AudioLayoutTest.AudioConstructor
-AudioLayoutTest.AudioConstructorPreload
-AudioLayoutTest.AudioConstructorSrc
-AudioLayoutTest.AudioOnlyVideoIntrinsicSize
-MediaLayoutTest.VideoNoAutoplayTest
-MediaLayoutTest.VideoAutoplayTest
-MediaLayoutTest.VideoLoopTest
-WorkerLayoutTest.SharedWorkerFastConstructor
-WorkerLayoutTest.SharedWorkerFastContextGC
-WorkerLayoutTest.SharedWorkerFastException
-WorkerLayoutTest.SharedWorkerFastGC
-WorkerLayoutTest.SharedWorkerFastInIframe
-WorkerLayoutTest.SharedWorkerFastLocation
-WorkerLayoutTest.SharedWorkerFastName
-WorkerLayoutTest.SharedWorkerFastNavigator
-WorkerLayoutTest.SharedWorkerFastReplaceGlobalConstructor
-WorkerLayoutTest.SharedWorkerFastReplaceSelf
-WorkerLayoutTest.SharedWorkerFastScriptError
-WorkerLayoutTest.SharedWorkerFastShared
-WorkerLayoutTest.SharedWorkerFastSimple
-WorkerXHRHttpLayoutTest.Tests
 
 # Needs to start the test server before
 # BrowserTestBase::SetUpCommandLine is called, but on Android
@@ -47,6 +29,7 @@ WorkerXHRHttpLayoutTest.Tests
 SecurityExploitBrowserTest.SetWebUIProperty
 
 # Plugins are not supported.
+BrowserPluginThreadedCompositorPixelTest.*
 BrowserPluginHostTest.*
 BrowserPluginTest.*
 PluginTest.*
@@ -54,6 +37,18 @@ PluginTest.*
 # These used to be test_shell_tests and were ported to content_browsertests in
 # https://codereview.chromium.org/14304004/. Investigate more.
 DomSerializerTests.*
+
+# http://crbug.com/297230
+DumpAccessibilityTreeTest.AccessibilityAriaLevel
+DumpAccessibilityTreeTest.AccessibilityAriaProgressbar
+DumpAccessibilityTreeTest.AccessibilityListMarkers
+DumpAccessibilityTreeTest.AccessibilityUl
+DumpAccessibilityTreeTest.AccessibilityCanvas
+RendererAccessibilityTest.DetachAccessibilityObject
+RendererAccessibilityTest.EditableTextModeFocusEvents
+DumpAccessibilityTreeTest.AccessibilityDialog
+DumpAccessibilityTreeTest.AccessibilityModalDialogClosed
+DumpAccessibilityTreeTest.AccessibilityModalDialogInIframeOpened
 
 # http://crbug.com/187500
 RenderViewImplTest.*
@@ -64,9 +59,6 @@ RendererAccessibilityTest.ShowAccessibilityObject
 RenderWidgetTest.OnMsgPaintAtSize
 PasswordFormConversionUtilsTest.ValidWebFormElementToPasswordForm
 PasswordFormConversionUtilsTest.InvalidWebFormElementToPasswordForm
-
-# Multiple test servers support: http://crbug/187570
-RenderViewHostManagerTest.*
 
 # http://crbug.com/215894
 DownloadContentTest.CancelInterruptedDownload
@@ -79,38 +71,56 @@ DownloadContentTest.ResumeInterruptedDownloadNoVerifiers
 DownloadContentTest.ResumeInterruptedDownloadBadPrecondition
 DownloadContentTest.ResumeWithDeletedFile
 
-# http://crbug.com/181069
-WebrtcBrowserTest.CanSetupVideoCall
-WebrtcBrowserTest.CanSetupAudioAndVideoCall
-WebrtcBrowserTest.CanSetupAudioAndVideoCallWithoutMsidAndBundle
-WebrtcBrowserTest.CallWithDataOnly
-WebrtcBrowserTest.CallWithDataAndMedia
-WebrtcBrowserTest.CanMakeEmptyCallThenAddStreamsAndRenegotiate
-WebrtcBrowserTest.CallWithNewVideoMediaStream
-WebrtcBrowserTest.GetAudioAndVideoStreamAndClone
-WebrtcBrowserTest.GetAudioAndVideoStreamAndStop
-WebrtcBrowserTest.GetVideoStreamAndStop
-WebRTCInternalsBrowserTest.WithRealPeerConnectionCall
-
-# http://crbug.com/175683
-WebrtcBrowserTest.CallWithDataAndLaterAddMedia
-
 # http://crbug.com/224134
 RenderWidgetHostBrowserTest.GetSnapshotFromRendererTest
 
 # http://crbug.com/233118
-FileSystemLayoutTest.*
 IndexedDBBrowserTest.*
 IndexedDBBrowserTestWithMissingSSTFile.DestroyTest
 IndexedDBBrowserTestWithVersion0Schema.MigrationTest
 IndexedDBBrowserTestWithVersion123456Schema.DestroyTest
 IndexedDBBrowserTestWithVersion987654SSVData.DestroyTest
-IndexedDBLayoutTest.*
-BlobLayoutTest.XhrResponseBlob
 
-# http://crbug.com/243843
-MediaSourceTest.ConfigChangeVideo
-MediaSourceTest.Playback_AudioOnly_WebM
-MediaSourceTest.Playback_Type_Error
-MediaSourceTest.Playback_VideoAudio_WebM
-MediaSourceTest.Playback_VideoOnly_WebM
+# http://crbug.com/256184
+IndexedDBBrowserTestWithCorruptLevelDB.DestroyTest
+
+BookmarkletTest.NonEmptyResult
+
+# http://crbug.com/256238
+SignalTest.*
+
+# http://crbug.com/311344
+BrowserGpuChannelHostFactoryTest.AlreadyEstablished
+BrowserGpuChannelHostFactoryTest.Basic
+BrowserGpuChannelHostFactoryTest.CrashAndRecover
+BrowserGpuChannelHostFactoryTest.EstablishAndTerminate
+
+# http://crbug.com/338011
+WithInputHandlerProxy/TouchInputBrowserTest.MultiPointTouchPress/0
+WithInputHandlerProxy/TouchInputBrowserTest.TouchHandlerConsume/0
+WithInputHandlerProxy/TouchInputBrowserTest.TouchHandlerNoConsume/0
+WithInputHandlerProxy/TouchInputBrowserTest.TouchNoHandler/0
+WithoutInputHandlerProxy/TouchInputBrowserTest.MultiPointTouchPress/0
+WithoutInputHandlerProxy/TouchInputBrowserTest.TouchHandlerConsume/0
+WithoutInputHandlerProxy/TouchInputBrowserTest.TouchHandlerNoConsume/0
+WithoutInputHandlerProxy/TouchInputBrowserTest.TouchNoHandler/0
+TouchActionBrowserTest.*
+
+# http://crbug.com/338408
+TracingControllerTest.EnableCaptureAndDisableMonitoring
+
+# http://crbug.com/338023
+SecurityExploitBrowserTest.AttemptDuplicateRenderViewHost
+SecurityExploitBrowserTest.AttemptDuplicateRenderWidgetHost
+
+# http://crbug.com/338411
+FrameTreeBrowserTest.NavigateWithLeftoverFrames
+
+# http://crbug.com/338421
+GinBrowserTest.GinAndGarbageCollection
+
+# http://crbug.com/341995
+TracingControllerTest.EnableCaptureAndDisableMonitoringWithFilePath
+
+# http://crbug.com/343604
+MSE_ClearKey/EncryptedMediaTest.ConfigChangeVideo/0

@@ -8,16 +8,13 @@ import logging
 import os
 import re
 
-from pylib import buildbot_report
 from pylib import constants
+from pylib.utils import flakiness_dashboard_results_uploader
 
-import flakiness_dashboard_results_uploader
 
-
-def _LogToFile(results, test_type, test_suite, build_type):
+def _LogToFile(results, test_type, suite_name):
   """Log results to local files which can be used for aggregation later."""
-  log_file_path = os.path.join(constants.CHROME_DIR, 'out',
-                               build_type, 'test_logs')
+  log_file_path = os.path.join(constants.GetOutDirectory(), 'test_logs')
   if not os.path.exists(log_file_path):
     os.mkdir(log_file_path)
   full_file_name = os.path.join(
@@ -31,7 +28,7 @@ def _LogToFile(results, test_type, test_suite, build_type):
 
   logging.info('Writing results to %s.' % full_file_name)
   with open(full_file_name, 'a') as log_file:
-    shortened_suite_name = test_suite[:25] + (test_suite[25:] and '...')
+    shortened_suite_name = suite_name[:25] + (suite_name[25:] and '...')
     print >> log_file, '%s%s' % (shortened_suite_name.ljust(30),
                                  results.GetShortForm())
 
@@ -49,11 +46,11 @@ def _LogToFlakinessDashboard(results, test_type, test_package,
 
   try:
     if flakiness_server == constants.UPSTREAM_FLAKINESS_SERVER:
-        assert test_package in ['ContentShellTest',
-                                'ChromiumTestShellTest',
-                                'AndroidWebViewTest']
-        dashboard_test_type = ('%s_instrumentation_tests' %
-                               test_package.lower().rstrip('test'))
+      assert test_package in ['ContentShellTest',
+                                'ChromeShellTest',
+                              'AndroidWebViewTest']
+      dashboard_test_type = ('%s_instrumentation_tests' %
+                             test_package.lower().rstrip('test'))
     # Downstream server.
     else:
       dashboard_test_type = 'Chromium_Android_Instrumentation'
@@ -65,7 +62,7 @@ def _LogToFlakinessDashboard(results, test_type, test_package,
 
 
 def LogFull(results, test_type, test_package, annotation=None,
-            build_type='Debug', flakiness_server=None):
+            flakiness_server=None):
   """Log the tests results for the test suite.
 
   The results will be logged three different ways:
@@ -81,7 +78,6 @@ def LogFull(results, test_type, test_package, annotation=None,
                   'ContentShellTest' for instrumentation tests)
     annotation: If instrumenation test type, this is a list of annotations
                 (e.g. ['Smoke', 'SmallTest']).
-    build_type: Release/Debug
     flakiness_server: If provider, upload the results to flakiness dashboard
                       with this URL.
     """
@@ -102,19 +98,11 @@ def LogFull(results, test_type, test_package, annotation=None,
     # It is possible to have multiple buildbot steps for the same
     # instrumenation test package using different annotations.
     if annotation and len(annotation) == 1:
-      test_suite = annotation[0]
+      suite_name = annotation[0]
     else:
-      test_suite = test_package
-    _LogToFile(results, test_type, test_suite, build_type)
+      suite_name = test_package
+    _LogToFile(results, test_type, suite_name)
 
     if flakiness_server:
       _LogToFlakinessDashboard(results, test_type, test_package,
                                flakiness_server)
-
-
-def PrintAnnotation(results):
-  """Print buildbot annotations for test results."""
-  if not results.DidRunPass():
-    buildbot_report.PrintError()
-  else:
-    print 'Step success!'  # No annotation needed
