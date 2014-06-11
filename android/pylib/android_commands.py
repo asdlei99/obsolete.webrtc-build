@@ -39,7 +39,6 @@ import adb_interface
 import am_instrument_parser
 import errors
 
-from pylib.device import device_blacklist
 
 # Pattern to search for the next whole line of pexpect output and capture it
 # into a match group. We can't use ^ and $ for line start end with pexpect,
@@ -73,15 +72,6 @@ MD5SUM_DEVICE_FOLDER = constants.TEST_EXECUTABLE_DIR + '/md5sum/'
 MD5SUM_DEVICE_PATH = MD5SUM_DEVICE_FOLDER + 'md5sum_bin'
 MD5SUM_LD_LIBRARY_PATH = 'LD_LIBRARY_PATH=%s' % MD5SUM_DEVICE_FOLDER
 
-CONTROL_USB_CHARGING_COMMANDS = [
-  {
-    # Nexus 4
-    'witness_file': '/sys/module/pm8921_charger/parameters/disabled',
-    'enable_command': 'echo 0 > /sys/module/pm8921_charger/parameters/disabled',
-    'disable_command':
-        'echo 1 > /sys/module/pm8921_charger/parameters/disabled',
-  },
-]
 
 def GetAVDs():
   """Returns a list of AVDs."""
@@ -89,23 +79,28 @@ def GetAVDs():
   avds = re_avd.findall(cmd_helper.GetCmdOutput(['android', 'list', 'avd']))
   return avds
 
+
 def ResetBadDevices():
-  """Removes the blacklist that keeps track of bad devices for a current
-     build.
-  """
-  device_blacklist.ResetBlacklist()
+  """Removes the file that keeps track of bad devices for a current build."""
+  if os.path.exists(constants.BAD_DEVICES_JSON):
+    os.remove(constants.BAD_DEVICES_JSON)
+
 
 def ExtendBadDevices(devices):
-  """Adds devices to the blacklist that keeps track of bad devices for a
-     current build.
+  """Adds devices to BAD_DEVICES_JSON file.
 
-  The devices listed in the bad devices file will not be returned by
+  The devices listed in the BAD_DEVICES_JSON file will not be returned by
   GetAttachedDevices.
 
   Args:
-    devices: list of bad devices to be added to the bad devices file.
+    devices: list of bad devices to be added to the BAD_DEVICES_JSON file.
   """
-  device_blacklist.ExtendBlacklist(devices)
+  if os.path.exists(constants.BAD_DEVICES_JSON):
+    with open(constants.BAD_DEVICES_JSON, 'r') as f:
+      bad_devices = json.load(f)
+    devices.extend(bad_devices)
+  with open(constants.BAD_DEVICES_JSON, 'w') as f:
+    json.dump(list(set(devices)), f)
 
 
 def GetAttachedDevices(hardware=True, emulator=True, offline=False):
@@ -155,11 +150,12 @@ def GetAttachedDevices(hardware=True, emulator=True, offline=False):
   if offline:
     devices = devices + offline_devices
 
-  # Remove any devices in the blacklist.
-  blacklist = device_blacklist.ReadBlacklist()
-  if len(blacklist):
-    logging.info('Avoiding bad devices %s', ' '.join(blacklist))
-    devices = [device for device in devices if device not in blacklist]
+  # Remove bad devices listed in the bad_devices json file.
+  if os.path.exists(constants.BAD_DEVICES_JSON):
+    with open(constants.BAD_DEVICES_JSON, 'r') as f:
+      bad_devices = json.load(f)
+    logging.info('Avoiding bad devices %s', ' '.join(bad_devices))
+    devices = [device for device in devices if device not in bad_devices]
 
   preferred_device = os.environ.get('ANDROID_SERIAL')
   if preferred_device in devices:
@@ -294,10 +290,6 @@ class AndroidCommands(object):
     self._util_wrapper = ''
     self._system_properties = system_properties.SystemProperties(self.Adb())
     self._push_if_needed_cache = {}
-    self._control_usb_charging_command = {
-        'command': None,
-        'cached': False,
-    }
 
   @property
   def system_properties(self):
@@ -964,40 +956,31 @@ class AndroidCommands(object):
     host_hash_tuples, device_hash_tuples = self._RunMd5Sum(
         real_host_path, real_device_path)
 
+    # Ignore extra files on the device.
+    if not ignore_filenames:
+      host_files = [os.path.relpath(os.path.normpath(p.path),
+                                    real_host_path) for p in host_hash_tuples]
+
+      def HostHas(fname):
+        return any(path in fname for path in host_files)
+
+      device_hash_tuples = [h for h in device_hash_tuples if HostHas(h.path)]
+
     if len(host_hash_tuples) > len(device_hash_tuples):
       logging.info('%s files do not exist on the device' %
                    (len(host_hash_tuples) - len(device_hash_tuples)))
 
-    host_rel = [(os.path.relpath(os.path.normpath(t.path), real_host_path),
-                 t.hash)
-                for t in host_hash_tuples]
+    # Constructs the target device path from a given host path. Don't use when
+    # only a single file is given as the base name given in device_path may
+    # differ from that in host_path.
+    def HostToDevicePath(host_file_path):
+      return os.path.join(device_path, os.path.relpath(host_file_path,
+                                                       real_host_path))
 
-    if os.path.isdir(real_host_path):
-      def RelToRealPaths(rel_path):
-        return (os.path.join(real_host_path, rel_path),
-                os.path.join(real_device_path, rel_path))
-    else:
-      assert len(host_rel) == 1
-      def RelToRealPaths(_):
-        return (real_host_path, real_device_path)
-
-    if ignore_filenames:
-      # If we are ignoring file names, then we want to push any file for which
-      # a file with an equivalent MD5 sum does not exist on the device.
-      device_hashes = set([h.hash for h in device_hash_tuples])
-      ShouldPush = lambda p, h: h not in device_hashes
-    else:
-      # Otherwise, we want to push any file on the host for which a file with
-      # an equivalent MD5 sum does not exist at the same relative path on the
-      # device.
-      device_rel = dict([(os.path.relpath(os.path.normpath(t.path),
-                                          real_device_path),
-                          t.hash)
-                         for t in device_hash_tuples])
-      ShouldPush = lambda p, h: p not in device_rel or h != device_rel[p]
-
-    return [RelToRealPaths(path) for path, host_hash in host_rel
-            if ShouldPush(path, host_hash)]
+    device_hashes = [h.hash for h in device_hash_tuples]
+    return [(t.path, HostToDevicePath(t.path) if
+             os.path.isdir(real_host_path) else real_device_path)
+            for t in host_hash_tuples if t.hash not in device_hashes]
 
   def PushIfNeeded(self, host_path, device_path):
     """Pushes |host_path| to |device_path|.
@@ -1846,38 +1829,6 @@ class AndroidCommands(object):
     for line in out:
       logging.info('[%s]> %s', device_repr, line)
     self.RunShellCommand('rm %s' % temp_script_file)
-
-  def _GetControlUsbChargingCommand(self):
-    if self._control_usb_charging_command['cached']:
-      return self._control_usb_charging_command['command']
-    self._control_usb_charging_command['cached'] = True
-    for command in CONTROL_USB_CHARGING_COMMANDS:
-      # Assert command is valid.
-      assert 'disable_command' in command
-      assert 'enable_command' in command
-      assert 'witness_file' in command
-      witness_file = command['witness_file']
-      if self.FileExistsOnDevice(witness_file):
-        self._control_usb_charging_command['command'] = command
-        return command
-    return None
-
-  def CanControlUsbCharging(self):
-    return self._GetControlUsbChargingCommand() is not None
-
-  def DisableUsbCharging(self):
-    command = self._GetControlUsbChargingCommand()
-    if not command:
-      raise Exception('Unable to act on usb charging.')
-    disable_command = command['disable_command']
-    self.RunShellCommand(disable_command)
-
-  def EnableUsbCharging(self):
-    command = self._GetControlUsbChargingCommand()
-    if not command:
-      raise Exception('Unable to act on usb charging.')
-    disable_command = command['enable_command']
-    self.RunShellCommand(disable_command)
 
 
 class NewLineNormalizer(object):

@@ -278,6 +278,9 @@
       'sysroot%': '<(sysroot)',
       'chroot_cmd%': '<(chroot_cmd)',
 
+      # Whether content/chrome is using mojo: see http://crbug.com/353602
+      'use_mojo%': 0,
+
       # Set to 1 to enable fast builds. Set to 2 for even faster builds
       # (it disables debug info for fastest compilation - only for use
       # on compile-only bots).
@@ -416,6 +419,9 @@
 
       # Enable Chrome browser extensions
       'enable_extensions%': 1,
+
+      # Enable browser automation.
+      'enable_automation%': 1,
 
       # Enable Google Now.
       'enable_google_now%': 1,
@@ -649,6 +655,7 @@
         }],
 
         ['OS=="android"', {
+          'enable_automation%': 0,
           'enable_extensions%': 0,
           'enable_google_now%': 0,
           'cld_version%': 1,
@@ -686,12 +693,20 @@
           'enable_autofill_dialog%': 1
         }],
 
-        ['OS=="android"', {
+        ['OS=="android" and android_webview_build==0', {
           'enable_webrtc%': 1,
+        }],
+
+        # Disable WebRTC for building WebView as part of Android system.
+        # TODO(boliu): Decide if we want WebRTC, and if so, also merge
+        # the necessary third_party repositories.
+        ['OS=="android" and android_webview_build==1', {
+          'enable_webrtc%': 0,
         }],
 
         ['OS=="ios"', {
           'disable_ftp_support%': 1,
+          'enable_automation%': 0,
           'enable_extensions%': 0,
           'enable_google_now%': 0,
           'cld_version%': 1,
@@ -856,6 +871,10 @@
           'enable_printing%': 0,
         }],
 
+        ['OS=="win" or (OS=="linux" and chromeos==0)', {
+          'use_mojo%': 1,
+        }],
+
         # By default, use ICU data file (icudtl.dat) on all platforms
         # except when building Android WebView.
         # TODO(jshin): Handle 'use_system_icu' on Linux (Chromium).
@@ -927,6 +946,7 @@
     'use_aura%': '<(use_aura)',
     'use_ash%': '<(use_ash)',
     'use_cras%': '<(use_cras)',
+    'use_mojo%': '<(use_mojo)',
     'use_openssl%': '<(use_openssl)',
     'use_openssl_certs%': '<(use_openssl_certs)',
     'use_nss%': '<(use_nss)',
@@ -1002,6 +1022,7 @@
     'test_isolation_mode%': '<(test_isolation_mode)',
     'test_isolation_outdir%': '<(test_isolation_outdir)',
     'test_isolation_fail_on_missing': '<(test_isolation_fail_on_missing)',
+    'enable_automation%': '<(enable_automation)',
     'enable_printing%': '<(enable_printing)',
     'enable_spellcheck%': '<(enable_spellcheck)',
     'enable_google_now%': '<(enable_google_now)',
@@ -1216,10 +1237,6 @@
     # whether warnings are treated as errors.
     'chromium_code%': 0,
 
-    # Disable fatal linker warnings, similarly to how we make it possible
-    # to disable -Werror (e.g. for different toolchain versions).
-    'disable_fatal_linker_warnings%': 0,
-
     'release_valgrind_build%': 0,
 
     # TODO(thakis): Make this a blacklist instead, http://crbug.com/101600
@@ -1313,9 +1330,6 @@
     # Compile d8 for the host toolset.
     'v8_toolset_for_d8': 'host',
 
-    # Compiles v8 without its platform library.
-    'v8_use_default_platform': 0,
-
     # Use the chromium skia by default.
     'use_system_skia%': '0',
 
@@ -1334,9 +1348,6 @@
 
     # Set to 1 to compile with the hole punching for the protected video.
     'video_hole%': 0,
-
-    # Set to 1 to compile with MSE support for MPEG2 TS
-    'enable_mpeg2ts_stream_parser%': 0,
 
     'conditions': [
       # Enable the Syzygy optimization step for the official builds.
@@ -1567,6 +1578,7 @@
         'proprietary_codecs%': '<(proprietary_codecs)',
         'safe_browsing%': 2,
         'input_speech%': 0,
+        'enable_automation%': 0,
         'java_bridge%': 1,
         'build_ffmpegsumo%': 0,
         # TODO(dmikurube): Change the default of use_allocator to "none".
@@ -1786,6 +1798,9 @@
       ['toolkit_views==1', {
         'grit_defines': ['-D', 'toolkit_views'],
       }],
+      ['use_mojo==1', {
+        'grit_defines': ['-D', 'use_mojo'],
+      }],
       ['toolkit_uses_gtk==1', {
         'grit_defines': ['-D', 'toolkit_uses_gtk'],
       }],
@@ -1884,7 +1899,7 @@
         'grit_defines': ['-D', 'enable_notifications'],
       }],
       ['enable_resource_whitelist_generation==1', {
-        'grit_rc_header_format': ['-h', '#define {textual_id} _Pragma("whitelisted_resource_{numeric_id}") {numeric_id}'],
+        'grit_rc_header_format': ['-h', '#define {textual_id} _Pragma("{textual_id}") {numeric_id}'],
       }],
       ['enable_mdns==1 or OS=="mac"', {
         'grit_defines': ['-D', 'enable_service_discovery'],
@@ -2279,6 +2294,9 @@
       ['use_libjpeg_turbo==1', {
         'defines': ['USE_LIBJPEG_TURBO=1'],
       }],
+      ['use_mojo==1', {
+        'defines': ['USE_MOJO=1'],
+      }],
       ['use_x11==1', {
         'defines': ['USE_X11=1'],
       }],
@@ -2346,7 +2364,7 @@
           'GCC_GENERATE_DEBUGGING_SYMBOLS': 'NO',
         },
         'conditions': [
-          ['clang==1 and asan==0 and msan==0 and tsan==0', {
+          ['clang==1', {
             # Clang creates chubby debug information, which makes linking very
             # slow. For now, don't create debug information with clang.  See
             # http://crbug.com/70000
@@ -2508,6 +2526,9 @@
       }],
       ['enable_background==1', {
         'defines': ['ENABLE_BACKGROUND=1'],
+      }],
+      ['enable_automation==1', {
+        'defines': ['ENABLE_AUTOMATION=1'],
       }],
       ['enable_google_now==1', {
         'defines': ['ENABLE_GOOGLE_NOW=1'],
@@ -3052,19 +3073,13 @@
     },
   },
   'conditions': [
-    ['os_posix==1', {
-      'target_defaults': {
-        'ldflags': [
-          '-Wl,-z,now',
-          '-Wl,-z,relro',
-        ],
-      },
-    }],
     # TODO(jochen): Enable this on chromeos on arm. http://crbug.com/356580
-    ['os_posix==1 and disable_fatal_linker_warnings==0 and (chromeos==0 or target_arch!="arm")', {
+    ['os_posix==1 and (chromeos==0 or target_arch!="arm")', {
       'target_defaults': {
         'ldflags': [
           '-Wl,--fatal-warnings',
+          '-Wl,-z,now',
+          '-Wl,-z,relro',
         ],
       },
     }],
@@ -3795,16 +3810,12 @@
           ['linux_dump_symbols==1', {
             'cflags': [ '-g' ],
             'conditions': [
-              # TODO(thestig) We should not need to specify chromeos==0 here,
-              # but somehow ChromeOS uses gold despite linux_use_gold_binary==0.
-              # http://crbug.com./360082
-              ['linux_use_gold_binary==0 and chromeos==0 and OS!="android"', {
+              ['target_arch=="ia32" and OS!="android"', {
                 'target_conditions': [
                   ['_toolset=="target"', {
                     'ldflags': [
-                      # Workarounds for linker OOM.
+                      # Workaround for linker OOM.
                       '-Wl,--no-keep-memory',
-                      '-Wl,--reduce-memory-overheads',
                     ],
                   }],
                 ],
@@ -4303,12 +4314,6 @@
 
                 # TODO(thakis): Remove, http://crbug.com/341352
                 '-Wno-absolute-value',
-
-                # This warns on selectors from Cocoa headers (-length, -set).
-                # cfe-dev is currently discussing the merits of this warning.
-                # TODO(thakis): Reevaluate what to do with this, based one
-                # cfe-dev discussion.
-                '-Wno-selector-type-mismatch',
               ],
 
               'conditions': [
@@ -4337,16 +4342,6 @@
               'OTHER_CFLAGS': [
                 # See http://crbug.com/110262
                 '-fcolor-diagnostics',
-              ],
-            }],
-            ['OS=="ios" and target_subarch!="arm32" and \
-              "<(GENERATOR)"=="ninja"', {
-              'OTHER_CFLAGS': [
-                # TODO(ios): when building Chrome for iOS on 64-bit platform
-                # with Xcode, the -Wshorted-64-to-32 warning is automatically
-                # enabled. This cause failures when compiling protobuf code,
-                # so disable the warning. http://crbug.com/359107
-                '-Wno-shorten-64-to-32',
               ],
             }],
           ],

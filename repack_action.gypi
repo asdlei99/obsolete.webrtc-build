@@ -11,7 +11,6 @@
 {
   'variables': {
     'repack_path': '<(DEPTH)/tools/grit/grit/format/repack.py',
-    'repack_options%': [],
   },
   'inputs': [
     '<(repack_path)',
@@ -20,11 +19,5 @@
   'outputs': [
     '<(pak_output)'
   ],
-  'action': [
-    'python',
-    '<(repack_path)',
-    '<@(repack_options)',
-    '<(pak_output)',
-    '<@(pak_inputs)',
-  ],
+  'action': ['python', '<(repack_path)', '<(pak_output)', '<@(pak_inputs)'],
 }
