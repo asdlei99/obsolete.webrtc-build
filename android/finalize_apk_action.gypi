@@ -22,6 +22,16 @@
     'keystore_path%': '<(DEPTH)/build/android/ant/chromium-debug.keystore',
     'keystore_name%': 'chromiumdebugkey',
     'keystore_password%': 'chromium',
+    'conditions': [
+        # Webview doesn't use zipalign or rezip_apk_jar.
+        ['android_webview_build==0', {
+          'zipalign_path%': '<(android_sdk_tools)/zipalign',
+          'rezip_apk_jar_path%': '<(PRODUCT_DIR)/lib.java/rezip_apk.jar'
+        }, {
+          'zipalign_path%': "",
+          'rezip_apk_jar_path%': "",
+        }],
+    ],
   },
   'inputs': [
     '<(DEPTH)/build/android/gyp/util/build_utils.py',
@@ -34,11 +44,13 @@
   ],
   'action': [
     'python', '<(DEPTH)/build/android/gyp/finalize_apk.py',
-    '--android-sdk-root=<(android_sdk_root)',
+    '--zipalign-path=<(zipalign_path)',
     '--unsigned-apk-path=<(input_apk_path)',
     '--final-apk-path=<(output_apk_path)',
     '--key-path=<(keystore_path)',
     '--key-name=<(keystore_name)',
     '--key-passwd=<(keystore_password)',
+    '--load-library-from-zip-file=<(load_library_from_zip_file)',
+    '--rezip-apk-jar-path=<(rezip_apk_jar_path)',
   ],
 }

@@ -20,14 +20,19 @@ graph data.
 with the step results previously saved. The buildbot will then process the graph
 data accordingly.
 
-
 The JSON steps file contains a dictionary in the format:
-[
-  ["step_name_foo", "script_to_execute foo"],
-  ["step_name_bar", "script_to_execute bar"]
-]
-
-This preserves the order in which the steps are executed.
+{ "version": int,
+  "steps": {
+    "foo": {
+      "device_affinity": int,
+      "cmd": "script_to_execute foo"
+    },
+    "bar": {
+      "device_affinity": int,
+      "cmd": "script_to_execute bar"
+    }
+  }
+}
 
 The JSON flaky steps file contains a list with step names which results should
 be ignored:
@@ -41,19 +46,41 @@ option:
   --device: the serial number to be passed to all adb commands.
 """
 
+import collections
 import datetime
+import json
 import logging
 import os
 import pickle
+import shutil
 import sys
+import tempfile
 import threading
 import time
 
+from pylib import cmd_helper
 from pylib import constants
 from pylib import forwarder
-from pylib import pexpect
 from pylib.base import base_test_result
 from pylib.base import base_test_runner
+from pylib.device import device_errors
+
+
+def OutputJsonList(json_input, json_output):
+  with file(json_input, 'r') as i:
+    all_steps = json.load(i)
+  step_names = all_steps['steps'].keys()
+  with file(json_output, 'w') as o:
+    o.write(json.dumps(step_names))
+  return 0
+
+
+def OutputChartjson(test_name, json_file_name):
+  file_name = os.path.join(constants.PERF_OUTPUT_DIR, test_name)
+  with file(file_name, 'r') as f:
+    persisted_result = pickle.load(f)
+  with open(json_file_name, 'w') as o:
+    o.write(persisted_result['chartjson'])
 
 
 def PrintTestOutput(test_name):
@@ -84,7 +111,7 @@ def PrintTestOutput(test_name):
 def PrintSummary(test_names):
   logging.info('*' * 80)
   logging.info('Sharding summary')
-  total_time = 0
+  device_total_time = collections.defaultdict(int)
   for test_name in test_names:
     file_name = os.path.join(constants.PERF_OUTPUT_DIR, test_name)
     if not os.path.exists(file_name):
@@ -95,8 +122,10 @@ def PrintSummary(test_names):
     logging.info('%s : exit_code=%d in %d secs at %s',
                  result['name'], result['exit_code'], result['total_time'],
                  result['device'])
-    total_time += result['total_time']
-  logging.info('Total steps time: %d secs', total_time)
+    device_total_time[result['device']] += result['total_time']
+  for device, device_time in device_total_time.iteritems():
+    logging.info('Total for device %s : %d secs', device, device_time)
+  logging.info('Total steps time: %d secs', sum(device_total_time.values()))
 
 
 class _HeartBeatLogger(object):
@@ -131,19 +160,25 @@ class _HeartBeatLogger(object):
 
 
 class TestRunner(base_test_runner.BaseTestRunner):
-  def __init__(self, test_options, device, tests, flaky_tests):
+  def __init__(self, test_options, device, shard_index, max_shard, tests,
+      flaky_tests):
     """A TestRunner instance runs a perf test on a single device.
 
     Args:
       test_options: A PerfOptions object.
       device: Device to run the tests.
+      shard_index: the index of this device.
+      max_shards: the maximum shard index.
       tests: a dict mapping test_name to command.
       flaky_tests: a list of flaky test_name.
     """
     super(TestRunner, self).__init__(device, None, 'Release')
     self._options = test_options
+    self._shard_index = shard_index
+    self._max_shard = max_shard
     self._tests = tests
     self._flaky_tests = flaky_tests
+    self._output_dir = None
 
   @staticmethod
   def _IsBetter(result):
@@ -164,6 +199,29 @@ class TestRunner(base_test_runner.BaseTestRunner):
                              result['name']), 'w') as f:
         f.write(pickle.dumps(result))
 
+  def _CheckDeviceAffinity(self, test_name):
+    """Returns True if test_name has affinity for this shard."""
+    affinity = (self._tests['steps'][test_name]['device_affinity'] %
+                self._max_shard)
+    if self._shard_index == affinity:
+      return True
+    logging.info('Skipping %s on %s (affinity is %s, device is %s)',
+                 test_name, self.device_serial, affinity, self._shard_index)
+    return False
+
+  def _CleanupOutputDirectory(self):
+    if self._output_dir:
+      shutil.rmtree(self._output_dir, ignore_errors=True)
+      self._output_dir = None
+
+  def _ReadChartjsonOutput(self):
+    if not self._output_dir:
+      return ''
+
+    json_output_path = os.path.join(self._output_dir, 'results-chart.json')
+    with open(json_output_path) as f:
+      return f.read()
+
   def _LaunchPerfTest(self, test_name):
     """Runs a perf test.
 
@@ -173,15 +231,24 @@ class TestRunner(base_test_runner.BaseTestRunner):
     Returns:
       A tuple containing (Output, base_test_result.ResultType)
     """
+    if not self._CheckDeviceAffinity(test_name):
+      return '', base_test_result.ResultType.PASS
+
     try:
       logging.warning('Unmapping device ports')
-      forwarder.Forwarder.UnmapAllDevicePorts(self.adb)
-      self.adb.RestartAdbdOnDevice()
+      forwarder.Forwarder.UnmapAllDevicePorts(self.device)
+      self.device.old_interface.RestartAdbdOnDevice()
     except Exception as e:
       logging.error('Exception when tearing down device %s', e)
 
     cmd = ('%s --device %s' %
-           (self._tests[test_name], self.device))
+           (self._tests['steps'][test_name]['cmd'],
+            self.device_serial))
+
+    if self._options.collect_chartjson_data:
+      self._output_dir = tempfile.mkdtemp()
+      cmd = cmd + ' --output-dir=%s' % self._output_dir
+
     logging.info('%s : %s', test_name, cmd)
     start_time = datetime.datetime.now()
 
@@ -200,22 +267,37 @@ class TestRunner(base_test_runner.BaseTestRunner):
     cwd = os.path.abspath(constants.DIR_SOURCE_ROOT)
     if full_cmd.startswith('src/'):
       cwd = os.path.abspath(os.path.join(constants.DIR_SOURCE_ROOT, os.pardir))
-    output, exit_code = pexpect.run(
-        full_cmd, cwd=cwd,
-        withexitstatus=True, logfile=logfile, timeout=timeout,
-        env=os.environ)
-    if self._options.single_step:
-      # Stop the logger.
-      logfile.stop()
+    try:
+      exit_code, output = cmd_helper.GetCmdStatusAndOutputWithTimeout(
+          full_cmd, timeout, cwd=cwd, shell=True, logfile=logfile)
+      json_output = self._ReadChartjsonOutput()
+    except cmd_helper.TimeoutError as e:
+      exit_code = -1
+      output = str(e)
+      json_output = ''
+    finally:
+      self._CleanupOutputDirectory()
+      if self._options.single_step:
+        logfile.stop()
     end_time = datetime.datetime.now()
     if exit_code is None:
       exit_code = -1
     logging.info('%s : exit_code=%d in %d secs at %s',
                  test_name, exit_code, (end_time - start_time).seconds,
-                 self.device)
-    result_type = base_test_result.ResultType.FAIL
+                 self.device_serial)
+
     if exit_code == 0:
       result_type = base_test_result.ResultType.PASS
+    else:
+      result_type = base_test_result.ResultType.FAIL
+      # Since perf tests use device affinity, give the device a chance to
+      # recover if it is offline after a failure. Otherwise, the master sharder
+      # will remove it from the pool and future tests on this device will fail.
+      try:
+        self.device.WaitUntilFullyBooted(timeout=120)
+      except device_errors.CommandTimeoutError as e:
+        logging.error('Device failed to return after %s: %s' % (test_name, e))
+
     actual_exit_code = exit_code
     if test_name in self._flaky_tests:
       # The exit_code is used at the second stage when printing the
@@ -227,11 +309,12 @@ class TestRunner(base_test_runner.BaseTestRunner):
     persisted_result = {
         'name': test_name,
         'output': output,
+        'chartjson': json_output,
         'exit_code': exit_code,
         'actual_exit_code': actual_exit_code,
         'result_type': result_type,
         'total_time': (end_time - start_time).seconds,
-        'device': self.device,
+        'device': self.device_serial,
         'cmd': cmd,
     }
     self._SaveResult(persisted_result)

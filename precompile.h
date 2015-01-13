@@ -20,12 +20,13 @@
 
 #define BUILD_PRECOMPILE_H_
 
+#define _USE_MATH_DEFINES
+
 // The Windows header needs to come before almost all the other
 // Windows-specific headers.
 #include <Windows.h>
 #include <dwmapi.h>
 #include <shellapi.h>
-#include <wincrypt.h>  // 4
 #include <wtypes.h>  // 2
 
 // Defines in atlbase.h cause conflicts; if we could figure out how
@@ -106,5 +107,3 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "intsafe_workaround.h"

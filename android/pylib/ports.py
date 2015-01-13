@@ -9,11 +9,9 @@ import fcntl
 import httplib
 import logging
 import os
-import re
 import socket
 import traceback
 
-from pylib import cmd_helper
 from pylib import constants
 
 
@@ -57,7 +55,7 @@ def AllocateTestServerPort():
     with open(constants.TEST_SERVER_PORT_FILE, 'r+') as fp:
       port = int(fp.read())
       ports_tried.append(port)
-      while IsHostPortUsed(port):
+      while not IsHostPortAvailable(port):
         port += 1
         ports_tried.append(port)
       if (port > constants.TEST_SERVER_PORT_LAST or
@@ -67,7 +65,7 @@ def AllocateTestServerPort():
         fp.seek(0, os.SEEK_SET)
         fp.write('%d' % (port + 1))
   except Exception as e:
-    logging.info(e)
+    logging.error(e)
   finally:
     if fp_lock:
       fcntl.flock(fp_lock, fcntl.LOCK_UN)
@@ -80,32 +78,30 @@ def AllocateTestServerPort():
   return port
 
 
-def IsHostPortUsed(host_port):
-  """Checks whether the specified host port is used or not.
-
-  Uses -n -P to inhibit the conversion of host/port numbers to host/port names.
+def IsHostPortAvailable(host_port):
+  """Checks whether the specified host port is available.
 
   Args:
-    host_port: Port on host we want to check.
+    host_port: Port on host to check.
 
   Returns:
-    True if the port on host is already used, otherwise returns False.
+    True if the port on host is available, otherwise returns False.
   """
-  port_info = '(\*)|(127\.0\.0\.1)|(localhost):%d' % host_port
-  # TODO(jnd): Find a better way to filter the port. Note that connecting to the
-  # socket and closing it would leave it in the TIME_WAIT state. Setting
-  # SO_LINGER on it and then closing it makes the Python HTTP server crash.
-  re_port = re.compile(port_info, re.MULTILINE)
-  if re_port.search(cmd_helper.GetCmdOutput(['lsof', '-nPi:%d' % host_port])):
+  s = socket.socket()
+  try:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('', host_port))
+    s.close()
     return True
-  return False
+  except socket.error:
+    return False
 
 
-def IsDevicePortUsed(adb, device_port, state=''):
+def IsDevicePortUsed(device, device_port, state=''):
   """Checks whether the specified device port is used or not.
 
   Args:
-    adb: Instance of AndroidCommands for talking to the device.
+    device: A DeviceUtils instance.
     device_port: Port on device we want to check.
     state: String of the specified state. Default is empty string, which
            means any state.
@@ -114,7 +110,7 @@ def IsDevicePortUsed(adb, device_port, state=''):
     True if the port on device is already used, otherwise returns False.
   """
   base_url = '127.0.0.1:%d' % device_port
-  netstat_results = adb.RunShellCommand('netstat', log_result=False)
+  netstat_results = device.RunShellCommand('netstat')
   for single_connect in netstat_results:
     # Column 3 is the local address which we want to check with.
     connect_results = single_connect.split()

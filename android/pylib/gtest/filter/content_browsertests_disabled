@@ -23,11 +23,6 @@ GpuPixelBrowserTest.*
 FileSystemBrowserTestWithLowQuota.QuotaTest
 ChildProcessSecurityPolicyInProcessBrowserTest.NoLeak
 
-# Needs to start the test server before
-# BrowserTestBase::SetUpCommandLine is called, but on Android
-# the test server needs to be started in SetUpOnMainThread().
-SecurityExploitBrowserTest.SetWebUIProperty
-
 # Plugins are not supported.
 BrowserPluginThreadedCompositorPixelTest.*
 BrowserPluginHostTest.*
@@ -49,6 +44,7 @@ RendererAccessibilityTest.EditableTextModeFocusEvents
 DumpAccessibilityTreeTest.AccessibilityDialog
 DumpAccessibilityTreeTest.AccessibilityModalDialogClosed
 DumpAccessibilityTreeTest.AccessibilityModalDialogInIframeOpened
+RendererAccessibilityTest.EventOnObjectNotInTree
 
 # http://crbug.com/187500
 RenderViewImplTest.*
@@ -74,15 +70,17 @@ DownloadContentTest.ResumeWithDeletedFile
 # http://crbug.com/224134
 RenderWidgetHostBrowserTest.GetSnapshotFromRendererTest
 
-# http://crbug.com/233118
-IndexedDBBrowserTest.*
-IndexedDBBrowserTestWithMissingSSTFile.DestroyTest
-IndexedDBBrowserTestWithVersion0Schema.MigrationTest
-IndexedDBBrowserTestWithVersion123456Schema.DestroyTest
-IndexedDBBrowserTestWithVersion987654SSVData.DestroyTest
+# http://crbug.com/386227
+IndexedDBBrowserTest.VersionChangeCrashResilience
 
-# http://crbug.com/256184
-IndexedDBBrowserTestWithCorruptLevelDB.DestroyTest
+# http://crbug.com/386222
+IndexedDBBrowserTest.DoesntHangTest
+
+# http://crbug.com/233118
+IndexedDBBrowserTest.NullKeyPathPersistence
+
+# http://crbug.com/342525
+IndexedDBBrowserTestSingleProcess.RenderThreadShutdownTest
 
 BookmarkletTest.NonEmptyResult
 
@@ -96,22 +94,14 @@ BrowserGpuChannelHostFactoryTest.CrashAndRecover
 BrowserGpuChannelHostFactoryTest.EstablishAndTerminate
 
 # http://crbug.com/338011
-WithInputHandlerProxy/TouchInputBrowserTest.MultiPointTouchPress/0
-WithInputHandlerProxy/TouchInputBrowserTest.TouchHandlerConsume/0
-WithInputHandlerProxy/TouchInputBrowserTest.TouchHandlerNoConsume/0
-WithInputHandlerProxy/TouchInputBrowserTest.TouchNoHandler/0
-WithoutInputHandlerProxy/TouchInputBrowserTest.MultiPointTouchPress/0
-WithoutInputHandlerProxy/TouchInputBrowserTest.TouchHandlerConsume/0
-WithoutInputHandlerProxy/TouchInputBrowserTest.TouchHandlerNoConsume/0
-WithoutInputHandlerProxy/TouchInputBrowserTest.TouchNoHandler/0
+TouchInputBrowserTest.MultiPointTouchPress
+TouchInputBrowserTest.TouchHandlerConsume
+TouchInputBrowserTest.TouchHandlerNoConsume
+TouchInputBrowserTest.TouchNoHandler
 TouchActionBrowserTest.*
 
 # http://crbug.com/338408
 TracingControllerTest.EnableCaptureAndDisableMonitoring
-
-# http://crbug.com/338023
-SecurityExploitBrowserTest.AttemptDuplicateRenderViewHost
-SecurityExploitBrowserTest.AttemptDuplicateRenderWidgetHost
 
 # http://crbug.com/338411
 FrameTreeBrowserTest.NavigateWithLeftoverFrames

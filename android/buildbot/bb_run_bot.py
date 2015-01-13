@@ -68,7 +68,7 @@ def GetEnvironment(host_obj, testing, extra_env_vars=None):
     sys.exit(1)
   env = json.loads(json_env)
   env['GYP_DEFINES'] = env.get('GYP_DEFINES', '') + \
-      ' fastbuild=1 use_goma=1 gomadir=%s' % bb_utils.GOMA_DIR
+      ' OS=android fastbuild=1 use_goma=1 gomadir=%s' % bb_utils.GOMA_DIR
   if host_obj.target_arch:
     env['GYP_DEFINES'] += ' target_arch=%s' % host_obj.target_arch
   extra_gyp = host_obj.extra_gyp_defines
@@ -115,19 +115,27 @@ def GetCommands(options, bot_config):
 
 def GetBotStepMap():
   compile_step = ['compile']
+  chrome_proxy_tests = ['chrome_proxy']
+  python_unittests = ['python_unittests']
   std_host_tests = ['check_webview_licenses', 'findbugs']
+  emma_coverage_tests = [x for x in std_host_tests if x is not 'findbugs']
   std_build_steps = ['compile', 'zip_build']
   std_test_steps = ['extract_build']
   std_tests = ['ui', 'unit']
+  telemetry_tests = ['telemetry_perf_unittests']
+  telemetry_tests_user_build = ['telemetry_unittests',
+                                'telemetry_perf_unittests']
   flakiness_server = (
       '--flakiness-server=%s' % constants.UPSTREAM_FLAKINESS_SERVER)
   experimental = ['--experimental']
-
+  bisect_chrome_output_dir = os.path.abspath(
+      os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir,
+                   os.pardir, 'bisect', 'src', 'out'))
   B = BotConfig
-  H = (lambda steps, extra_args=None, extra_gyp=None, target_arch=None :
+  H = (lambda steps, extra_args=None, extra_gyp=None, target_arch=None:
        HostConfig('build/android/buildbot/bb_host_steps.py', steps, extra_args,
                   extra_gyp, target_arch))
-  T = (lambda tests, extra_args=None :
+  T = (lambda tests, extra_args=None:
        TestConfig('build/android/buildbot/bb_device_steps.py', tests,
                   extra_args))
 
@@ -138,7 +146,11 @@ def GetBotStepMap():
       B('main-clang-builder',
         H(compile_step, extra_gyp='clang=1 component=shared_library')),
       B('main-clobber', H(compile_step)),
-      B('main-tests', H(std_test_steps), T(std_tests, [flakiness_server])),
+      B('main-tests-rel', H(std_test_steps),
+        T(std_tests + telemetry_tests + chrome_proxy_tests,
+          ['--cleanup', flakiness_server])),
+      B('main-tests', H(std_test_steps),
+        T(std_tests, ['--cleanup', flakiness_server])),
 
       # Other waterfalls
       B('asan-builder-tests', H(compile_step,
@@ -146,43 +158,41 @@ def GetBotStepMap():
         T(std_tests, ['--asan', '--asan-symbolize'])),
       B('blink-try-builder', H(compile_step)),
       B('chromedriver-fyi-tests-dbg', H(std_test_steps),
-        T(['chromedriver'], ['--install=ChromeShell'])),
+        T(['chromedriver'],
+          ['--install=ChromeShell', '--install=ChromeDriverWebViewShell',
+           '--skip-wipe', '--cleanup'])),
       B('fyi-x86-builder-dbg',
-        H(compile_step + std_host_tests, experimental, target_arch='x86')),
+        H(compile_step + std_host_tests, experimental, target_arch='ia32')),
       B('fyi-builder-dbg',
-        H(std_build_steps + std_host_tests, experimental,
-          extra_gyp='emma_coverage=1 android_lint=1')),
+        H(std_build_steps + emma_coverage_tests, experimental,
+          extra_gyp='emma_coverage=1')),
       B('x86-builder-dbg',
-        H(compile_step + std_host_tests, target_arch='x86')),
-      B('fyi-builder-rel', H(std_build_steps,  experimental)),
+        H(compile_step + std_host_tests, target_arch='ia32')),
+      B('fyi-builder-rel', H(std_build_steps, experimental)),
       B('fyi-tests', H(std_test_steps),
-        T(std_tests, ['--experimental', flakiness_server,
-                      '--coverage-bucket', CHROMIUM_COVERAGE_BUCKET])),
+        T(std_tests + python_unittests,
+                      ['--experimental', flakiness_server,
+                      '--coverage-bucket', CHROMIUM_COVERAGE_BUCKET,
+                      '--cleanup'])),
+      B('user-build-fyi-tests-dbg', H(std_test_steps),
+        T(telemetry_tests_user_build)),
       B('fyi-component-builder-tests-dbg',
         H(compile_step, extra_gyp='component=shared_library'),
         T(std_tests, ['--experimental', flakiness_server])),
-      B('gpu-builder-tests-dbg', H(compile_step), T(['gpu'])),
+      B('gpu-builder-tests-dbg',
+        H(compile_step),
+        T(['gpu'], ['--install=ContentShell'])),
       # Pass empty T([]) so that logcat monitor and device status check are run.
-      B('perf-bisect-builder-tests-dbg', H(['bisect_perf_regression']), T([])),
+      B('perf-bisect-builder-tests-dbg',
+        H(['bisect_perf_regression']),
+        T([], ['--chrome-output-dir', bisect_chrome_output_dir])),
       B('perf-tests-rel', H(std_test_steps),
-        T([], ['--install=ChromeShell'])),
+        T([], ['--install=ChromeShell', '--cleanup'])),
       B('webkit-latest-webkit-tests', H(std_test_steps),
-        T(['webkit_layout', 'webkit'], ['--auto-reconnect'])),
+        T(['webkit_layout', 'webkit'], ['--cleanup', '--auto-reconnect'])),
       B('webkit-latest-contentshell', H(compile_step),
         T(['webkit_layout'], ['--auto-reconnect'])),
       B('builder-unit-tests', H(compile_step), T(['unit'])),
-      B('webrtc-chromium-builder',
-        H(std_build_steps,
-          extra_args=['--build-targets=android_builder_chromium_webrtc'])),
-      B('webrtc-native-builder',
-        H(std_build_steps,
-          extra_args=['--build-targets=android_builder_webrtc'],
-          extra_gyp='include_tests=1 enable_tracing=1')),
-      B('webrtc-chromium-tests', H(std_test_steps),
-        T(['webrtc_chromium'],
-          [flakiness_server, '--gtest-filter=WebRtc*'])),
-      B('webrtc-native-tests', H(std_test_steps),
-        T(['webrtc_native'], [flakiness_server])),
 
       # Generic builder config (for substring match).
       B('builder', H(std_build_steps)),
@@ -198,6 +208,7 @@ def GetBotStepMap():
       ('try-clang-builder', 'main-clang-builder'),
       ('try-fyi-builder-dbg', 'fyi-builder-dbg'),
       ('try-x86-builder-dbg', 'x86-builder-dbg'),
+      ('try-tests-rel', 'main-tests-rel'),
       ('try-tests', 'main-tests'),
       ('try-fyi-tests', 'fyi-tests'),
       ('webkit-latest-tests', 'main-tests'),
@@ -224,7 +235,7 @@ def GetBotStepMap():
 def GetBestMatch(id_map, id):
   config = id_map.get(id)
   if not config:
-    substring_matches = filter(lambda x: x in id, id_map.iterkeys())
+    substring_matches = [x for x in id_map.iterkeys() if x in id]
     if substring_matches:
       max_id = max(substring_matches, key=len)
       print 'Using config from id="%s" (substring match).' % max_id
@@ -269,6 +280,17 @@ def RunBotCommands(options, commands, env):
 
 
 def main(argv):
+  proc = subprocess.Popen(
+      ['/bin/hostname', '-f'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  hostname_stdout, hostname_stderr = proc.communicate()
+  if proc.returncode == 0:
+    print 'Running on: ' + hostname_stdout
+  else:
+    print >> sys.stderr, 'WARNING: failed to run hostname'
+    print >> sys.stderr, hostname_stdout
+    print >> sys.stderr, hostname_stderr
+    sys.exit(1)
+
   parser = GetRunBotOptParser()
   options, args = parser.parse_args(argv[1:])
   if args:

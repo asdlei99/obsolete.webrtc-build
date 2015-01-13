@@ -18,9 +18,9 @@ from pylib import android_commands
 android_commands.GetAttachedDevices = lambda: ['0', '1']
 from pylib import constants
 from pylib.base import base_test_result
+from pylib.base import test_collection
 from pylib.base import test_dispatcher
 from pylib.utils import watchdog_timer
-
 
 
 class TestException(Exception):
@@ -30,7 +30,7 @@ class TestException(Exception):
 class MockRunner(object):
   """A mock TestRunner."""
   def __init__(self, device='0', shard_index=0):
-    self.device = device
+    self.device_serial = device
     self.shard_index = shard_index
     self.setups = 0
     self.teardowns = 0
@@ -84,7 +84,7 @@ class TestFunctions(unittest.TestCase):
   @staticmethod
   def _RunTests(mock_runner, tests):
     results = []
-    tests = test_dispatcher._TestCollection(
+    tests = test_collection.TestCollection(
         [test_dispatcher._Test(t) for t in tests])
     test_dispatcher._RunTestsFromQueue(mock_runner, tests, results,
                                        watchdog_timer.WatchdogTimer(None), 2)
@@ -120,12 +120,17 @@ class TestFunctions(unittest.TestCase):
     for i in xrange(5):
       self.assertEqual(counter.GetAndIncrement(), i)
 
+  def testApplyMaxPerRun(self):
+    self.assertEqual(
+        ['A:B', 'C:D', 'E', 'F:G', 'H:I'],
+        test_dispatcher.ApplyMaxPerRun(['A:B', 'C:D:E', 'F:G:H:I'], 2))
+
 
 class TestThreadGroupFunctions(unittest.TestCase):
   """Tests test_dispatcher._RunAllTests and test_dispatcher._CreateRunners."""
   def setUp(self):
     self.tests = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
-    shared_test_collection = test_dispatcher._TestCollection(
+    shared_test_collection = test_collection.TestCollection(
         [test_dispatcher._Test(t) for t in self.tests])
     self.test_collection_factory = lambda: shared_test_collection
 
@@ -133,7 +138,7 @@ class TestThreadGroupFunctions(unittest.TestCase):
     runners = test_dispatcher._CreateRunners(MockRunner, ['0', '1'])
     for runner in runners:
       self.assertEqual(runner.setups, 1)
-    self.assertEqual(set([r.device for r in runners]),
+    self.assertEqual(set([r.device_serial for r in runners]),
                      set(['0', '1']))
     self.assertEqual(set([r.shard_index for r in runners]),
                      set([0, 1]))
@@ -187,15 +192,6 @@ class TestShard(unittest.TestCase):
         [], MockRunner, ['0', '1'], shard=True)
     self.assertEqual(len(results.GetAll()), 0)
     self.assertEqual(exit_code, constants.ERROR_EXIT_CODE)
-
-  def testTestsRemainWithAllDevicesOffline(self):
-    attached_devices = android_commands.GetAttachedDevices
-    android_commands.GetAttachedDevices = lambda: []
-    try:
-      with self.assertRaises(AssertionError):
-        _results, _exit_code = TestShard._RunShard(MockRunner)
-    finally:
-      android_commands.GetAttachedDevices = attached_devices
 
 
 class TestReplicate(unittest.TestCase):

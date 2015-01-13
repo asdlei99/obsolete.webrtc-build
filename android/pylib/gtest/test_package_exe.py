@@ -12,6 +12,8 @@ import tempfile
 from pylib import cmd_helper
 from pylib import constants
 from pylib import pexpect
+from pylib.device import device_errors
+from pylib.gtest import gtest_test_instance
 from pylib.gtest.test_package import TestPackage
 
 
@@ -31,12 +33,12 @@ class TestPackageExecutable(TestPackage):
                                      'lib.target')
 
   #override
-  def GetGTestReturnCode(self, adb):
+  def GetGTestReturnCode(self, device):
     ret = None
     ret_code = 1  # Assume failure if we can't find it
     ret_code_file = tempfile.NamedTemporaryFile()
     try:
-      if not adb.Adb().Pull(
+      if not device.PullFile(
           constants.TEST_EXECUTABLE_DIR + '/' +
           TestPackageExecutable._TEST_RUNNER_RET_VAL_FILE,
           ret_code_file.name):
@@ -52,7 +54,7 @@ class TestPackageExecutable(TestPackage):
     return ret
 
   @staticmethod
-  def _AddNativeCoverageExports(adb):
+  def _AddNativeCoverageExports(device):
     # export GCOV_PREFIX set the path for native coverage results
     # export GCOV_PREFIX_STRIP indicates how many initial directory
     #                          names to strip off the hardwired absolute paths.
@@ -62,62 +64,80 @@ class TestPackageExecutable(TestPackage):
     #     /code/chrome if GCOV_PREFIX_STRIP=3
     try:
       depth = os.environ['NATIVE_COVERAGE_DEPTH_STRIP']
+      export_string = ('export GCOV_PREFIX="%s/gcov"\n' %
+                       device.GetExternalStoragePath())
+      export_string += 'export GCOV_PREFIX_STRIP=%s\n' % depth
+      return export_string
     except KeyError:
       logging.info('NATIVE_COVERAGE_DEPTH_STRIP is not defined: '
                    'No native coverage.')
       return ''
-    export_string = ('export GCOV_PREFIX="%s/gcov"\n' %
-                     adb.GetExternalStorage())
-    export_string += 'export GCOV_PREFIX_STRIP=%s\n' % depth
-    return export_string
+    except device_errors.CommandFailedError:
+      logging.info('No external storage found: No native coverage.')
+      return ''
 
   #override
-  def ClearApplicationState(self, adb):
-    adb.KillAllBlocking(self.suite_name, 30)
+  def ClearApplicationState(self, device):
+    try:
+      # We don't expect the executable to be running, so we don't attempt
+      # to retry on failure.
+      device.KillAll(self.suite_name, blocking=True, timeout=30, retries=0)
+    except device_errors.CommandFailedError:
+      # KillAll raises an exception if it can't find a process with the given
+      # name. We only care that there is no process with the given name, so
+      # we can safely eat the exception.
+      pass
 
   #override
-  def CreateCommandLineFileOnDevice(self, adb, test_filter, test_arguments):
+  def CreateCommandLineFileOnDevice(self, device, test_filter, test_arguments):
     tool_wrapper = self.tool.GetTestWrapper()
     sh_script_file = tempfile.NamedTemporaryFile()
     # We need to capture the exit status from the script since adb shell won't
     # propagate to us.
-    sh_script_file.write('cd %s\n'
-                         '%s'
-                         '%s %s/%s --gtest_filter=%s %s\n'
-                         'echo $? > %s' %
-                         (constants.TEST_EXECUTABLE_DIR,
-                          self._AddNativeCoverageExports(adb),
-                          tool_wrapper, constants.TEST_EXECUTABLE_DIR,
-                          self.suite_name,
-                          test_filter, test_arguments,
-                          TestPackageExecutable._TEST_RUNNER_RET_VAL_FILE))
+    sh_script_file.write(
+        'cd %s\n'
+        '%s'
+        '%s LD_LIBRARY_PATH=%s/%s_deps %s/%s --gtest_filter=%s %s\n'
+        'echo $? > %s' %
+        (constants.TEST_EXECUTABLE_DIR,
+         self._AddNativeCoverageExports(device),
+         tool_wrapper,
+         constants.TEST_EXECUTABLE_DIR,
+         self.suite_name,
+         constants.TEST_EXECUTABLE_DIR,
+         self.suite_name,
+         test_filter, test_arguments,
+         TestPackageExecutable._TEST_RUNNER_RET_VAL_FILE))
     sh_script_file.flush()
     cmd_helper.RunCmd(['chmod', '+x', sh_script_file.name])
-    adb.PushIfNeeded(
+    device.PushChangedFiles([(
         sh_script_file.name,
-        constants.TEST_EXECUTABLE_DIR + '/chrome_test_runner.sh')
+        constants.TEST_EXECUTABLE_DIR + '/chrome_test_runner.sh')])
     logging.info('Conents of the test runner script: ')
     for line in open(sh_script_file.name).readlines():
       logging.info('  ' + line.rstrip())
 
   #override
-  def GetAllTests(self, adb):
-    all_tests = adb.RunShellCommand(
-        '%s %s/%s --gtest_list_tests' %
-        (self.tool.GetTestWrapper(),
-         constants.TEST_EXECUTABLE_DIR,
-         self.suite_name))
-    return self._ParseGTestListTests(all_tests)
+  def GetAllTests(self, device):
+    cmd = '%s %s/%s --gtest_list_tests' % (self.tool.GetTestWrapper(),
+        constants.TEST_EXECUTABLE_DIR, self.suite_name)
+    lib_path = '%s/%s_deps' % (constants.TEST_EXECUTABLE_DIR, self.suite_name)
+    (exit_code, output) = device.old_interface.GetAndroidToolStatusAndOutput(
+        cmd, lib_path=lib_path)
+    if exit_code != 0:
+      raise Exception(
+          'Failed to start binary:\n%s' % '\n'.join(output))
+    return gtest_test_instance.ParseGTestListTests(output)
 
   #override
-  def SpawnTestProcess(self, adb):
-    args = ['adb', '-s', adb.GetDevice(), 'shell', 'sh',
+  def SpawnTestProcess(self, device):
+    args = ['adb', '-s', str(device), 'shell', 'sh',
             constants.TEST_EXECUTABLE_DIR + '/chrome_test_runner.sh']
     logging.info(args)
     return pexpect.spawn(args[0], args[1:], logfile=sys.stdout)
 
   #override
-  def Install(self, adb):
+  def Install(self, device):
     if self.tool.NeedsDebugInfo():
       target_name = self.suite_path
     else:
@@ -135,5 +155,8 @@ class TestPackageExecutable(TestPackage):
             (target_name, target_mtime, self.suite_path, source_mtime,
              self.suite_name + '_stripped'))
 
-    test_binary = constants.TEST_EXECUTABLE_DIR + '/' + self.suite_name
-    adb.PushIfNeeded(target_name, test_binary)
+    test_binary_path = constants.TEST_EXECUTABLE_DIR + '/' + self.suite_name
+    device.PushChangedFiles([(target_name, test_binary_path)])
+    deps_path = self.suite_path + '_deps'
+    if os.path.isdir(deps_path):
+      device.PushChangedFiles([(deps_path, test_binary_path + '_deps')])

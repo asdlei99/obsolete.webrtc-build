@@ -11,27 +11,23 @@ config("sdk") {
 
   defines = [
     "_ATL_NO_OPENGL",
-    "_SECURE_ATL",
-    "_WIN32_WINNT=0x0602",
     "_WINDOWS",
     "CERT_CHAIN_PARA_HAS_EXTRA_FIELDS",
-    "NOMINMAX",
-    "NTDDI_VERSION=0x06020000",
+    "NTDDI_VERSION=0x06030000",
     "PSAPI_VERSION=1",
     "WIN32",
-    "WIN32_LEAN_AND_MEAN",
-    "WINVER=0x0602",
+    "_SECURE_ATL",
   ]
 
-  # The Windows SDK include directories must be first. They both have a sal.h,
-  # and the SDK one is newer and the SDK uses some newer features from it not
-  # present in the Visual Studio one.
-  include_dirs = [
-    "$windows_sdk_path\Include\shared",
-    "$windows_sdk_path\Include\um",
-    "$windows_sdk_path\Include\winrt",
-    "$visual_studio_path\VC\include",
-    "$visual_studio_path\VC\atlmfc\include",
+  include_dirs = system_include_dirs
+}
+
+# Sets the default Windows build version. This is separated because some
+# targets need to manually override it for their compiles.
+config("winver") {
+  defines = [
+    "_WIN32_WINNT=0x0603",
+    "WINVER=0x0603",
   ]
 }
 
@@ -40,7 +36,7 @@ config("sdk_link") {
   if (cpu_arch == "x64") {
     ldflags = [ "/MACHINE:X64" ]
     lib_dirs = [
-      "$windows_sdk_path\Lib\win8\um\x64",
+      "$windows_sdk_path\Lib\winv6.3\um\x64",
       "$visual_studio_path\VC\lib\amd64",
       "$visual_studio_path\VC\atlmfc\lib\amd64",
     ]
@@ -50,7 +46,7 @@ config("sdk_link") {
       "/SAFESEH",  # Not compatible with x64 so use only for x86.
     ]
     lib_dirs = [
-      "$windows_sdk_path\Lib\win8\um\x86",
+      "$windows_sdk_path\Lib\winv6.3\um\x86",
       "$visual_studio_path\VC\lib",
       "$visual_studio_path\VC\atlmfc\lib",
     ]
@@ -108,4 +104,33 @@ config("incremental_linking") {
 }
 config("no_incremental_linking") {
   ldflags = [ "/INCREMENTAL:NO" ]
+}
+
+# Character set ----------------------------------------------------------------
+
+# Not including this config means "ansi" (8-bit system codepage).
+config("unicode") {
+  defines = [
+    "_UNICODE",
+    "UNICODE",
+  ]
+}
+
+# Lean and mean ----------------------------------------------------------------
+
+# Some third party code might not compile with WIN32_LEAN_AND_MEAN so we have
+# to have a separate config for it. Remove this config from your target to
+# get the "bloaty and accomodating" version of windows.h.
+config("lean_and_mean") {
+  defines = [ "WIN32_LEAN_AND_MEAN" ]
+}
+
+# Nominmax --------------------------------------------------------------------
+
+# Some third party code defines NOMINMAX before including windows.h, which
+# then causes warnings when it's been previously defined on the command line.
+# For such targets, this config can be removed.
+
+config("nominmax") {
+  defines = [ "NOMINMAX" ]
 }

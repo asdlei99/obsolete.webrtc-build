@@ -9,7 +9,6 @@ import collections
 InstrumentationOptions = collections.namedtuple('InstrumentationOptions', [
     'tool',
     'cleanup_test_files',
-    'push_deps',
     'annotations',
     'exclude_annotations',
     'test_filter',
@@ -20,4 +19,8 @@ InstrumentationOptions = collections.namedtuple('InstrumentationOptions', [
     'coverage_dir',
     'test_apk',
     'test_apk_path',
-    'test_apk_jar_path'])
+    'test_apk_jar_path',
+    'test_runner',
+    'test_support_apk_path',
+    'device_flags',
+    'isolate_file_path'])

@@ -3,6 +3,8 @@
 # found in the LICENSE file.
 
 import logging
+from pylib import android_commands
+from pylib.device import device_utils
 
 
 class OmapThrottlingDetector(object):
@@ -11,11 +13,11 @@ class OmapThrottlingDetector(object):
                     'temperature')
 
   @staticmethod
-  def IsSupported(adb):
-    return adb.FileExistsOnDevice(OmapThrottlingDetector.OMAP_TEMP_FILE)
+  def IsSupported(device):
+    return device.FileExists(OmapThrottlingDetector.OMAP_TEMP_FILE)
 
-  def __init__(self, adb):
-    self._adb = adb
+  def __init__(self, device):
+    self._device = device
 
   @staticmethod
   def BecameThrottled(log_line):
@@ -31,17 +33,17 @@ class OmapThrottlingDetector(object):
       return float([s for s in log_line.split() if s.isdigit()][0]) / 1000.0
 
   def GetCurrentTemperature(self):
-    tempdata = self._adb.GetFileContents(OmapThrottlingDetector.OMAP_TEMP_FILE)
+    tempdata = self._device.ReadFile(OmapThrottlingDetector.OMAP_TEMP_FILE)
     return float(tempdata[0]) / 1000.0
 
 
 class ExynosThrottlingDetector(object):
   """Class to detect and track thermal throttling on an Exynos 5."""
   @staticmethod
-  def IsSupported(adb):
-    return adb.FileExistsOnDevice('/sys/bus/exynos5-core')
+  def IsSupported(device):
+    return device.FileExists('/sys/bus/exynos5-core')
 
-  def __init__(self, adb):
+  def __init__(self, device):
     pass
 
   @staticmethod
@@ -70,14 +72,17 @@ class ThermalThrottle(object):
     test run was affected by thermal throttling.
   """
 
-  def __init__(self, adb):
-    self._adb = adb
+  def __init__(self, device):
+    # TODO(jbudorick) Remove once telemetry gets switched over.
+    if isinstance(device, android_commands.AndroidCommands):
+      device = device_utils.DeviceUtils(device)
+    self._device = device
     self._throttled = False
     self._detector = None
-    if OmapThrottlingDetector.IsSupported(adb):
-      self._detector = OmapThrottlingDetector(adb)
-    elif ExynosThrottlingDetector.IsSupported(adb):
-      self._detector = ExynosThrottlingDetector(adb)
+    if OmapThrottlingDetector.IsSupported(device):
+      self._detector = OmapThrottlingDetector(device)
+    elif ExynosThrottlingDetector.IsSupported(device):
+      self._detector = ExynosThrottlingDetector(device)
 
   def HasBeenThrottled(self):
     """True if there has been any throttling since the last call to
@@ -94,8 +99,8 @@ class ThermalThrottle(object):
     if not self._detector:
       return False
     has_been_throttled = False
-    serial_number = self._adb.Adb().GetSerialNumber()
-    log = self._adb.RunShellCommand('dmesg -c')
+    serial_number = str(self._device)
+    log = self._device.RunShellCommand('dmesg -c')
     degree_symbol = unichr(0x00B0)
     for line in log:
       if self._detector.BecameThrottled(line):
@@ -121,7 +126,7 @@ class ThermalThrottle(object):
                       serial_number, temperature, degree_symbol)
 
       # Print temperature of battery, to give a system temperature
-      dumpsys_log = self._adb.RunShellCommand('dumpsys battery')
+      dumpsys_log = self._device.RunShellCommand('dumpsys battery')
       for line in dumpsys_log:
         if 'temperature' in line:
           btemp = float([s for s in line.split() if s.isdigit()][0]) / 10.0
@@ -129,3 +134,4 @@ class ThermalThrottle(object):
                         serial_number, btemp, degree_symbol)
 
     return has_been_throttled
+

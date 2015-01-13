@@ -5,6 +5,7 @@
 # found in the LICENSE file.
 
 """A class to keep track of devices across builds and report state."""
+import json
 import logging
 import optparse
 import os
@@ -29,7 +30,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from pylib import android_commands
 from pylib import constants
 from pylib.cmd_helper import GetCmdOutput
-
+from pylib.device import device_blacklist
+from pylib.device import device_list
+from pylib.device import device_utils
 
 def DeviceInfo(serial, options):
   """Gathers info on a device via various adb calls.
@@ -42,21 +45,19 @@ def DeviceInfo(serial, options):
     boolean indicating whether or not device can be used for testing.
   """
 
-  device_adb = android_commands.AndroidCommands(serial)
-
-  # TODO(navabi): Replace AdbShellCmd with device_adb.
-  device_type = device_adb.GetBuildProduct()
-  device_build = device_adb.GetBuildId()
-  device_build_type = device_adb.GetBuildType()
-  device_product_name = device_adb.GetProductName()
+  device_adb = device_utils.DeviceUtils(serial)
+  device_type = device_adb.build_product
+  device_build = device_adb.build_id
+  device_build_type = device_adb.build_type
+  device_product_name = device_adb.product_name
 
   try:
-    battery = device_adb.GetBatteryInfo()
+    battery_info = device_adb.old_interface.GetBatteryInfo()
   except Exception as e:
-    battery = None
+    battery_info = {}
     logging.error('Unable to obtain battery info for %s, %s', serial, e)
 
-  def _GetData(re_expression, line, lambda_function=lambda x:x):
+  def _GetData(re_expression, line, lambda_function=lambda x: x):
     if not line:
       return 'Unknown'
     found = re.findall(re_expression, line)
@@ -64,58 +65,52 @@ def DeviceInfo(serial, options):
       return lambda_function(found[0])
     return 'Unknown'
 
-  ac_power = _GetData('AC powered: (\w+)', battery)
-  battery_level = _GetData('level: (\d+)', battery)
-  battery_temp = _GetData('temperature: (\d+)', battery,
-                          lambda x: float(x) / 10.0)
-  imei_slice = _GetData('Device ID = (\d+)',
-                        device_adb.GetSubscriberInfo(),
+  battery_level = int(battery_info.get('level', 100))
+  imei_slice = _GetData(r'Device ID = (\d+)',
+                        device_adb.old_interface.GetSubscriberInfo(),
                         lambda x: x[-6:])
+  json_data = {
+    'serial': serial,
+    'type': device_type,
+    'build': device_build,
+    'build_detail': device_adb.GetProp('ro.build.fingerprint'),
+    'battery': battery_info,
+    'imei_slice': imei_slice,
+    'wifi_ip': device_adb.GetProp('dhcp.wlan0.ipaddress'),
+  }
   report = ['Device %s (%s)' % (serial, device_type),
             '  Build: %s (%s)' %
-              (device_build, device_adb.GetBuildFingerprint()),
-            '  Battery: %s%%' % battery_level,
-            '  Battery temp: %s' % battery_temp,
+              (device_build, json_data['build_detail']),
+            '  Current Battery Service state: ',
+            '\n'.join(['    %s: %s' % (k, v)
+                       for k, v in battery_info.iteritems()]),
             '  IMEI slice: %s' % imei_slice,
-            '  Wifi IP: %s' % device_adb.GetWifiIP(),
+            '  Wifi IP: %s' % json_data['wifi_ip'],
             '']
 
   errors = []
+  dev_good = True
   if battery_level < 15:
-    errors += ['Device critically low in battery. Turning off device.']
+    errors += ['Device critically low in battery. Will add to blacklist.']
+    dev_good = False
+    if not device_adb.old_interface.IsDeviceCharging():
+      if device_adb.old_interface.CanControlUsbCharging():
+        device_adb.old_interface.EnableUsbCharging()
+      else:
+        logging.error('Device %s is not charging' % serial)
   if not options.no_provisioning_check:
-    setup_wizard_disabled = device_adb.GetSetupWizardStatus() == 'DISABLED'
+    setup_wizard_disabled = (
+        device_adb.GetProp('ro.setupwizard.mode') == 'DISABLED')
     if not setup_wizard_disabled and device_build_type != 'user':
       errors += ['Setup wizard not disabled. Was it provisioned correctly?']
-  if device_product_name == 'mantaray' and ac_power != 'true':
+  if (device_product_name == 'mantaray' and
+      battery_info.get('AC powered', None) != 'true'):
     errors += ['Mantaray device not connected to AC power.']
 
-  # Turn off devices with low battery.
-  if battery_level < 15:
-    device_adb.EnableAdbRoot()
-    device_adb.Shutdown()
   full_report = '\n'.join(report)
-  return device_type, device_build, battery_level, full_report, errors, True
 
-
-def GetLastDevices(out_dir):
-  """Returns a list of devices that have been seen on the bot.
-
-  Args:
-    options: out_dir parameter of options argument is used as the base
-             directory to load and update the cache file.
-
-  Returns: List of device serial numbers that were on the bot.
-  """
-  devices_path = os.path.join(out_dir, '.last_devices')
-  devices = []
-  try:
-    with open(devices_path) as f:
-      devices = f.read().splitlines()
-  except IOError:
-    # Ignore error, file might not exist
-    pass
-  return devices
+  return (device_type, device_build, battery_level, full_report, errors,
+    dev_good, json_data)
 
 
 def CheckForMissingDevices(options, adb_online_devs):
@@ -134,21 +129,45 @@ def CheckForMissingDevices(options, adb_online_devs):
 
   out_dir = os.path.abspath(options.out_dir)
 
-  def WriteDeviceList(file_name, device_list):
-    path = os.path.join(out_dir, file_name)
-    if not os.path.exists(out_dir):
-      os.makedirs(out_dir)
-    with open(path, 'w') as f:
-      # Write devices currently visible plus devices previously seen.
-      f.write('\n'.join(set(device_list)))
+  # last_devices denotes all known devices prior to this run
+  last_devices_path = os.path.join(out_dir, device_list.LAST_DEVICES_FILENAME)
+  last_missing_devices_path = os.path.join(out_dir,
+      device_list.LAST_MISSING_DEVICES_FILENAME)
+  try:
+    last_devices = device_list.GetPersistentDeviceList(last_devices_path)
+  except IOError:
+    # Ignore error, file might not exist
+    last_devices = []
 
-  last_devices_path = os.path.join(out_dir, '.last_devices')
-  last_devices = GetLastDevices(out_dir)
+  try:
+    last_missing_devices = device_list.GetPersistentDeviceList(
+        last_missing_devices_path)
+  except IOError:
+    last_missing_devices = []
+
   missing_devs = list(set(last_devices) - set(adb_online_devs))
+  new_missing_devs = list(set(missing_devs) - set(last_missing_devices))
+
+  if new_missing_devs and os.environ.get('BUILDBOT_SLAVENAME'):
+    logging.info('new_missing_devs %s' % new_missing_devs)
+    devices_missing_msg = '%d devices not detected.' % len(missing_devs)
+    bb_annotations.PrintSummaryText(devices_missing_msg)
+
+    from_address = 'chrome-bot@chromium.org'
+    to_addresses = ['chrome-labs-tech-ticket@google.com',
+                    'chrome-android-device-alert@google.com']
+    cc_addresses = ['chrome-android-device-alert@google.com']
+    subject = 'Devices offline on %s, %s, %s' % (
+      os.environ.get('BUILDBOT_SLAVENAME'),
+      os.environ.get('BUILDBOT_BUILDERNAME'),
+      os.environ.get('BUILDBOT_BUILDNUMBER'))
+    msg = ('Please reboot the following devices:\n%s' %
+           '\n'.join(map(str, new_missing_devs)))
+    SendEmail(from_address, to_addresses, cc_addresses, subject, msg)
 
   all_known_devices = list(set(adb_online_devs) | set(last_devices))
-  WriteDeviceList('.last_devices', all_known_devices)
-  WriteDeviceList('.last_missing', missing_devs)
+  device_list.WritePersistentDeviceList(last_devices_path, all_known_devices)
+  device_list.WritePersistentDeviceList(last_missing_devices_path, missing_devs)
 
   if not all_known_devices:
     # This can happen if for some reason the .last_devices file is not
@@ -175,8 +194,7 @@ def CheckForMissingDevices(options, adb_online_devs):
             '@@@STEP_LINK@Click here to file a bug@%s@@@\n' % crbug_link,
             'Cache file: %s\n\n' % last_devices_path,
             'adb devices: %s' % GetCmdOutput(['adb', 'devices']),
-            'adb devices(GetAttachedDevices): %s' %
-            android_commands.GetAttachedDevices()]
+            'adb devices(GetAttachedDevices): %s' % adb_online_devs]
   else:
     new_devs = set(adb_online_devs) - set(last_devices)
     if new_devs and os.path.exists(last_devices_path):
@@ -187,17 +205,14 @@ def CheckForMissingDevices(options, adb_online_devs):
              'regularly scheduled program.' % list(new_devs))
 
 
-def SendDeviceStatusAlert(msg):
-  from_address = 'buildbot@chromium.org'
-  to_address = 'chromium-android-device-alerts@google.com'
-  bot_name = os.environ.get('BUILDBOT_BUILDERNAME')
-  slave_name = os.environ.get('BUILDBOT_SLAVENAME')
-  subject = 'Device status check errors on %s, %s.' % (slave_name, bot_name)
-  msg_body = '\r\n'.join(['From: %s' % from_address, 'To: %s' % to_address,
+def SendEmail(from_address, to_addresses, cc_addresses, subject, msg):
+  msg_body = '\r\n'.join(['From: %s' % from_address,
+                          'To: %s' % ', '.join(to_addresses),
+                          'CC: %s' % ', '.join(cc_addresses),
                           'Subject: %s' % subject, '', msg])
   try:
     server = smtplib.SMTP('localhost')
-    server.sendmail(from_address, [to_address], msg_body)
+    server.sendmail(from_address, to_addresses, msg_body)
     server.quit()
   except Exception as e:
     print 'Failed to send alert email. Error: %s' % e
@@ -212,10 +227,10 @@ def RestartUsb():
   lsusb_proc = bb_utils.SpawnCmd(['lsusb'], stdout=subprocess.PIPE)
   lsusb_output, _ = lsusb_proc.communicate()
   if lsusb_proc.returncode:
-    print ('Error: Could not get list of USB ports (i.e. lsusb).')
+    print 'Error: Could not get list of USB ports (i.e. lsusb).'
     return lsusb_proc.returncode
 
-  usb_devices = [re.findall('Bus (\d\d\d) Device (\d\d\d)', lsusb_line)[0]
+  usb_devices = [re.findall(r'Bus (\d\d\d) Device (\d\d\d)', lsusb_line)[0]
                  for lsusb_line in lsusb_output.strip().split('\n')]
 
   all_restarted = True
@@ -242,7 +257,7 @@ def KillAllAdb():
       try:
         if 'adb' in p.name:
           yield p
-      except psutil.error.NoSuchProcess:
+      except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 
   for sig in [signal.SIGTERM, signal.SIGQUIT, signal.SIGKILL]:
@@ -251,12 +266,12 @@ def KillAllAdb():
         print 'kill %d %d (%s [%s])' % (sig, p.pid, p.name,
             ' '.join(p.cmdline))
         p.send_signal(sig)
-      except psutil.error.NoSuchProcess:
+      except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
   for p in GetAllAdb():
     try:
       print 'Unable to kill %d (%s [%s])' % (p.pid, p.name, ' '.join(p.cmdline))
-    except psutil.error.NoSuchProcess:
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
       pass
 
 
@@ -271,47 +286,54 @@ def main():
                     help='Output device status data for dashboard.')
   parser.add_option('--restart-usb', action='store_true',
                     help='Restart USB ports before running device check.')
+  parser.add_option('--json-output',
+                    help='Output JSON information into a specified file.')
+
   options, args = parser.parse_args()
   if args:
     parser.error('Unknown options %s' % args)
 
-  # Remove the last builds "bad devices" before checking device statuses.
-  android_commands.ResetBadDevices()
+  # Remove the last build's "bad devices" before checking device statuses.
+  device_blacklist.ResetBlacklist()
 
-  if options.restart_usb:
-    expected_devices = GetLastDevices(os.path.abspath(options.out_dir))
-    devices = android_commands.GetAttachedDevices()
-    # Only restart usb if devices are missing.
-    if set(expected_devices) != set(devices):
-      KillAllAdb()
-      retries = 5
-      usb_restarted = True
+  try:
+    expected_devices = device_list.GetPersistentDeviceList(
+        os.path.join(options.out_dir, device_list.LAST_DEVICES_FILENAME))
+  except IOError:
+    expected_devices = []
+  devices = android_commands.GetAttachedDevices()
+  # Only restart usb if devices are missing.
+  if set(expected_devices) != set(devices):
+    print 'expected_devices: %s, devices: %s' % (expected_devices, devices)
+    KillAllAdb()
+    retries = 5
+    usb_restarted = True
+    if options.restart_usb:
       if not RestartUsb():
         usb_restarted = False
         bb_annotations.PrintWarning()
         print 'USB reset stage failed, wait for any device to come back.'
-      while retries:
-        time.sleep(1)
-        devices = android_commands.GetAttachedDevices()
-        if set(expected_devices) == set(devices):
-          # All devices are online, keep going.
-          break
-        if not usb_restarted and devices:
-          # The USB wasn't restarted, but there's at least one device online.
-          # No point in trying to wait for all devices.
-          break
-        retries -= 1
+    while retries:
+      print 'retry adb devices...'
+      time.sleep(1)
+      devices = android_commands.GetAttachedDevices()
+      if set(expected_devices) == set(devices):
+        # All devices are online, keep going.
+        break
+      if not usb_restarted and devices:
+        # The USB wasn't restarted, but there's at least one device online.
+        # No point in trying to wait for all devices.
+        break
+      retries -= 1
 
-  devices = android_commands.GetAttachedDevices()
   # TODO(navabi): Test to make sure this fails and then fix call
-  offline_devices = android_commands.GetAttachedDevices(hardware=False,
-                                                        emulator=False,
-                                                        offline=True)
+  offline_devices = android_commands.GetAttachedDevices(
+      hardware=False, emulator=False, offline=True)
 
-  types, builds, batteries, reports, errors = [], [], [], [], []
+  types, builds, batteries, reports, errors, json_data = [], [], [], [], [], []
   fail_step_lst = []
   if devices:
-    types, builds, batteries, reports, errors, fail_step_lst = (
+    types, builds, batteries, reports, errors, fail_step_lst, json_data = (
         zip(*[DeviceInfo(dev, options) for dev in devices]))
 
   err_msg = CheckForMissingDevices(options, devices) or []
@@ -332,7 +354,12 @@ def main():
     bb_annotations.PrintWarning()
     msg = '\n'.join(err_msg)
     print msg
-    SendDeviceStatusAlert(msg)
+    from_address = 'buildbot@chromium.org'
+    to_addresses = ['chromium-android-device-alerts@google.com']
+    bot_name = os.environ.get('BUILDBOT_BUILDERNAME')
+    slave_name = os.environ.get('BUILDBOT_SLAVENAME')
+    subject = 'Device status check errors on %s, %s.' % (slave_name, bot_name)
+    SendEmail(from_address, to_addresses, [], subject, msg)
 
   if options.device_status_dashboard:
     perf_tests_results_helper.PrintPerfResult('BotDevices', 'OnlineDevices',
@@ -345,11 +372,18 @@ def main():
                                                 [battery], '%',
                                                 'unimportant')
 
-  if False in fail_step_lst:
-    # TODO(navabi): Build fails on device status check step if there exists any
-    # devices with critically low battery. Remove those devices from testing,
-    # allowing build to continue with good devices.
-    return 1
+  if options.json_output:
+    with open(options.json_output, 'wb') as f:
+      f.write(json.dumps(json_data, indent=4))
+
+  num_failed_devs = 0
+  for fail_status, device in zip(fail_step_lst, devices):
+    if not fail_status:
+      device_blacklist.ExtendBlacklist([str(device)])
+      num_failed_devs += 1
+
+  if num_failed_devs == len(devices):
+    return 2
 
   if not devices:
     return 1

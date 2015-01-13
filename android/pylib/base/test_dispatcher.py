@@ -15,12 +15,17 @@ Performs the following steps:
   collection until there are no tests left.
 """
 
+# TODO(jbudorick) Deprecate and remove this class after any relevant parts have
+# been ported to the new environment / test instance model.
+
 import logging
 import threading
 
 from pylib import android_commands
 from pylib import constants
 from pylib.base import base_test_result
+from pylib.base import test_collection
+from pylib.device import device_errors
 from pylib.utils import reraiser_thread
 from pylib.utils import watchdog_timer
 
@@ -61,87 +66,16 @@ class _Test(object):
     self.tries = tries
 
 
-class _TestCollection(object):
-  """A threadsafe collection of tests.
-
-  Args:
-    tests: List of tests to put in the collection.
-  """
-
-  def __init__(self, tests=None):
-    if not tests:
-      tests = []
-    self._lock = threading.Lock()
-    self._tests = []
-    self._tests_in_progress = 0
-    # Used to signal that an item is avaliable or all items have been handled.
-    self._item_avaliable_or_all_done = threading.Event()
-    for t in tests:
-      self.add(t)
-
-  def _pop(self):
-    """Pop a test from the collection.
-
-    Waits until a test is avaliable or all tests have been handled.
-
-    Returns:
-      A test or None if all tests have been handled.
-    """
-    while True:
-      # Wait for a test to be avaliable or all tests to have been handled.
-      self._item_avaliable_or_all_done.wait()
-      with self._lock:
-        # Check which of the two conditions triggered the signal.
-        if self._tests_in_progress == 0:
-          return None
-        try:
-          return self._tests.pop(0)
-        except IndexError:
-          # Another thread beat us to the avaliable test, wait again.
-          self._item_avaliable_or_all_done.clear()
-
-  def add(self, test):
-    """Add an test to the collection.
-
-    Args:
-      test: A test to add.
-    """
-    with self._lock:
-      self._tests.append(test)
-      self._item_avaliable_or_all_done.set()
-      self._tests_in_progress += 1
-
-  def test_completed(self):
-    """Indicate that a test has been fully handled."""
-    with self._lock:
-      self._tests_in_progress -= 1
-      if self._tests_in_progress == 0:
-        # All tests have been handled, signal all waiting threads.
-        self._item_avaliable_or_all_done.set()
-
-  def __iter__(self):
-    """Iterate through tests in the collection until all have been handled."""
-    while True:
-      r = self._pop()
-      if r is None:
-        break
-      yield r
-
-  def __len__(self):
-    """Return the number of tests currently in the collection."""
-    return len(self._tests)
-
-
-def _RunTestsFromQueue(runner, test_collection, out_results, watcher,
+def _RunTestsFromQueue(runner, collection, out_results, watcher,
                        num_retries, tag_results_with_device=False):
-  """Runs tests from the test_collection until empty using the given runner.
+  """Runs tests from the collection until empty using the given runner.
 
   Adds TestRunResults objects to the out_results list and may add tests to the
   out_retry list.
 
   Args:
     runner: A TestRunner object used to run the tests.
-    test_collection: A _TestCollection from which to get _Test objects to run.
+    collection: A TestCollection from which to get _Test objects to run.
     out_results: A list to add TestRunResults to.
     watcher: A watchdog_timer.WatchdogTimer object, used as a shared timeout.
     num_retries: Number of retries for a test.
@@ -160,18 +94,19 @@ def _RunTestsFromQueue(runner, test_collection, out_results, watcher,
     """
     new_test_run_results = base_test_result.TestRunResults()
     for test_result in test_run_results.GetAll():
-      test_result.SetName('%s_%s' % (runner.device[-4:], test_result.GetName()))
+      test_result.SetName('%s_%s' % (runner.device_serial[-4:],
+                                     test_result.GetName()))
       new_test_run_results.AddResult(test_result)
     return new_test_run_results
 
-  for test in test_collection:
+  for test in collection:
     watcher.Reset()
     try:
-      if not android_commands.IsDeviceAttached(runner.device):
+      if runner.device_serial not in android_commands.GetAttachedDevices():
         # Device is unresponsive, stop handling tests on this device.
-        msg = 'Device %s is unresponsive.' % runner.device
+        msg = 'Device %s is unresponsive.' % runner.device_serial
         logging.warning(msg)
-        raise android_commands.errors.DeviceUnresponsiveError(msg)
+        raise device_errors.DeviceUnreachableError(msg)
       result, retry = runner.RunTest(test.test)
       if tag_results_with_device:
         result = TagTestRunResults(result)
@@ -182,18 +117,18 @@ def _RunTestsFromQueue(runner, test_collection, out_results, watcher,
         pass_results.AddResults(result.GetPass())
         out_results.append(pass_results)
         logging.warning('Will retry test, try #%s.' % test.tries)
-        test_collection.add(_Test(test=retry, tries=test.tries))
+        collection.add(_Test(test=retry, tries=test.tries))
       else:
         # All tests passed or retry limit reached. Either way, record results.
         out_results.append(result)
     except:
       # An unhandleable exception, ensure tests get run by another device and
       # reraise this exception on the main thread.
-      test_collection.add(test)
+      collection.add(test)
       raise
     finally:
       # Retries count as separate tasks so always mark the popped test as done.
-      test_collection.test_completed()
+      collection.test_completed()
 
 
 def _SetUp(runner_factory, device, out_runners, threadsafe_counter):
@@ -215,7 +150,10 @@ def _SetUp(runner_factory, device, out_runners, threadsafe_counter):
     runner = runner_factory(device, index)
     runner.SetUp()
     out_runners.append(runner)
-  except android_commands.errors.DeviceUnresponsiveError as e:
+  except (device_errors.DeviceUnreachableError,
+          # TODO(jbudorick) Remove this once the underlying implementations
+          #                 for the above are switched or wrapped.
+          android_commands.errors.DeviceUnresponsiveError) as e:
     logging.warning('Failed to create shard for %s: [%s]', device, e)
 
 
@@ -225,7 +163,7 @@ def _RunAllTests(runners, test_collection_factory, num_retries, timeout=None,
 
   Args:
     runners: A list of TestRunner objects.
-    test_collection_factory: A callable to generate a _TestCollection object for
+    test_collection_factory: A callable to generate a TestCollection object for
         each test runner.
     num_retries: Number of retries for a test.
     timeout: Watchdog timeout in seconds.
@@ -248,22 +186,27 @@ def _RunAllTests(runners, test_collection_factory, num_retries, timeout=None,
       reraiser_thread.ReraiserThread(
           _RunTestsFromQueue,
           [r, tc, results, watcher, num_retries, tag_results_with_device],
-          name=r.device[-4:])
+          name=r.device_serial[-4:])
       for r, tc in zip(runners, test_collections)]
 
   workers = reraiser_thread.ReraiserThreadGroup(threads)
   workers.StartAll()
 
-  # Catch DeviceUnresponsiveErrors and set a warning exit code
+  # Catch DeviceUnreachableErrors and set a warning exit code
   try:
     workers.JoinAll(watcher)
-  except android_commands.errors.DeviceUnresponsiveError as e:
+  except (device_errors.DeviceUnreachableError,
+          # TODO(jbudorick) Remove this once the underlying implementations
+          #                 for the above are switched or wrapped.
+          android_commands.errors.DeviceUnresponsiveError) as e:
     logging.error(e)
-    exit_code = constants.WARNING_EXIT_CODE
 
-  assert all([len(tc) == 0 for tc in test_collections]), (
-      'Some tests were not run, all devices are likely offline (ran %d tests)' %
-      len(run_results.GetAll()))
+  if not all((len(tc) == 0 for tc in test_collections)):
+    logging.error('Only ran %d tests (all devices are likely offline).' %
+                  len(results))
+    for tc in test_collections:
+      run_results.AddResults(base_test_result.BaseTestResult(
+          t, base_test_result.ResultType.UNKNOWN) for t in tc.test_names())
 
   for r in results:
     run_results.AddTestRunResults(r)
@@ -308,15 +251,37 @@ def _TearDownRunners(runners, timeout=None):
     timeout: Watchdog timeout in seconds, defaults to the default timeout.
   """
   threads = reraiser_thread.ReraiserThreadGroup(
-      [reraiser_thread.ReraiserThread(r.TearDown, name=r.device[-4:])
+      [reraiser_thread.ReraiserThread(r.TearDown, name=r.device_serial[-4:])
        for r in runners])
   threads.StartAll()
   threads.JoinAll(watchdog_timer.WatchdogTimer(timeout))
 
 
+def ApplyMaxPerRun(tests, max_per_run):
+  """Rearrange the tests so that no group contains more than max_per_run tests.
+
+  Args:
+    tests:
+    max_per_run:
+
+  Returns:
+    A list of tests with no more than max_per_run per run.
+  """
+  tests_expanded = []
+  for test_group in tests:
+    if type(test_group) != str:
+      # Do not split test objects which are not strings.
+      tests_expanded.append(test_group)
+    else:
+      test_split = test_group.split(':')
+      for i in range(0, len(test_split), max_per_run):
+        tests_expanded.append(':'.join(test_split[i:i+max_per_run]))
+  return tests_expanded
+
+
 def RunTests(tests, runner_factory, devices, shard=True,
              test_timeout=DEFAULT_TIMEOUT, setup_timeout=DEFAULT_TIMEOUT,
-             num_retries=2):
+             num_retries=2, max_per_run=256):
   """Run all tests on attached devices, retrying tests that don't pass.
 
   Args:
@@ -333,6 +298,7 @@ def RunTests(tests, runner_factory, devices, shard=True,
     setup_timeout: Watchdog timeout in seconds for creating and cleaning up
         test runners.
     num_retries: Number of retries for a test.
+    max_per_run: Maximum number of tests to run in any group.
 
   Returns:
     A tuple of (base_test_result.TestRunResults object, exit code).
@@ -341,21 +307,25 @@ def RunTests(tests, runner_factory, devices, shard=True,
     logging.critical('No tests to run.')
     return (base_test_result.TestRunResults(), constants.ERROR_EXIT_CODE)
 
+  tests_expanded = ApplyMaxPerRun(tests, max_per_run)
   if shard:
-    # Generate a shared _TestCollection object for all test runners, so they
+    # Generate a shared TestCollection object for all test runners, so they
     # draw from a common pool of tests.
-    shared_test_collection = _TestCollection([_Test(t) for t in tests])
+    shared_test_collection = test_collection.TestCollection(
+        [_Test(t) for t in tests_expanded])
     test_collection_factory = lambda: shared_test_collection
     tag_results_with_device = False
     log_string = 'sharded across devices'
   else:
-    # Generate a unique _TestCollection object for each test runner, but use
+    # Generate a unique TestCollection object for each test runner, but use
     # the same set of tests.
-    test_collection_factory = lambda: _TestCollection([_Test(t) for t in tests])
+    test_collection_factory = lambda: test_collection.TestCollection(
+        [_Test(t) for t in tests_expanded])
     tag_results_with_device = True
     log_string = 'replicated on each device'
 
-  logging.info('Will run %d tests (%s): %s', len(tests), log_string, str(tests))
+  logging.info('Will run %d tests (%s): %s',
+               len(tests_expanded), log_string, str(tests_expanded))
   runners = _CreateRunners(runner_factory, devices, setup_timeout)
   try:
     return _RunAllTests(runners, test_collection_factory,
@@ -363,5 +333,10 @@ def RunTests(tests, runner_factory, devices, shard=True,
   finally:
     try:
       _TearDownRunners(runners, setup_timeout)
-    except android_commands.errors.DeviceUnresponsiveError as e:
+    except (device_errors.DeviceUnreachableError,
+            # TODO(jbudorick) Remove this once the underlying implementations
+            #                 for the above are switched or wrapped.
+            android_commands.errors.DeviceUnresponsiveError) as e:
       logging.warning('Device unresponsive during TearDown: [%s]', e)
+    except Exception as e:
+      logging.error('Unexpected exception caught during TearDown: %s' % str(e))

@@ -4,7 +4,8 @@
 
 // This file adds defines about the platform we're currently building on.
 //  Operating System:
-//    OS_WIN / OS_MACOSX / OS_LINUX / OS_POSIX (MACOSX or LINUX)
+//    OS_WIN / OS_MACOSX / OS_LINUX / OS_POSIX (MACOSX or LINUX) /
+//    OS_NACL (NACL_SFI or NACL_NONSFI) / OS_NACL_SFI / OS_NACL_NONSFI
 //  Compiler:
 //    COMPILER_MSVC / COMPILER_GCC
 //  Processor:
@@ -14,25 +15,36 @@
 #ifndef BUILD_BUILD_CONFIG_H_
 #define BUILD_BUILD_CONFIG_H_
 
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-
 // A set of macros to use for platform detection.
-#if defined(ANDROID)
+#if defined(__native_client__)
+// __native_client__ must be first, so that other OS_ defines are not set.
+#define OS_NACL 1
+// OS_NACL comes in two sandboxing technology flavors, SFI or Non-SFI.
+// PNaCl toolchain defines __native_client_nonsfi__ macro in Non-SFI build
+// mode, while it does not in SFI build mode.
+#if defined(__native_client_nonsfi__)
+#define OS_NACL_NONSFI
+#else
+#define OS_NACL_SFI
+#endif
+#elif defined(ANDROID)
 #define OS_ANDROID 1
 #elif defined(__APPLE__)
+// only include TargetConditions after testing ANDROID as some android builds
+// on mac don't have this header available and it's not needed unless the target
+// is really mac/ios.
+#include <TargetConditionals.h>
 #define OS_MACOSX 1
 #if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 #define OS_IOS 1
 #endif  // defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
-#elif defined(__native_client__)
-#define OS_NACL 1
 #elif defined(__linux__)
 #define OS_LINUX 1
+// include a system header to pull in features.h for glibc/uclibc macros.
+#include <unistd.h>
 #if defined(__GLIBC__) && !defined(__UCLIBC__)
 // we really are using glibc, not uClibc pretending to be glibc
-#define LIBC_GLIBC
+#define LIBC_GLIBC 1
 #endif
 #elif defined(_WIN32)
 #define OS_WIN 1
@@ -47,12 +59,6 @@
 #define OS_QNX 1
 #else
 #error Please add support for your platform in build/build_config.h
-#endif
-
-// Use TOOLKIT_GTK on X11 if TOOLKIT_VIEWS and USE_AURA aren't defined.
-#if defined(USE_X11) && !defined(TOOLKIT_VIEWS) && !defined(USE_AURA) && \
-    !defined(OS_NACL)
-#define TOOLKIT_GTK
 #endif
 
 #if defined(USE_OPENSSL) && defined(USE_NSS)
@@ -107,7 +113,7 @@
 #define ARCH_CPU_ARMEL 1
 #define ARCH_CPU_32_BITS 1
 #define ARCH_CPU_LITTLE_ENDIAN 1
-#elif defined(__arm64__) || defined(__aarch64__)
+#elif defined(__aarch64__)
 #define ARCH_CPU_ARM_FAMILY 1
 #define ARCH_CPU_ARM64 1
 #define ARCH_CPU_64_BITS 1
@@ -116,10 +122,17 @@
 #define ARCH_CPU_32_BITS 1
 #define ARCH_CPU_LITTLE_ENDIAN 1
 #elif defined(__MIPSEL__)
+#if defined(__LP64__)
+#define ARCH_CPU_MIPS64_FAMILY 1
+#define ARCH_CPU_MIPS64EL 1
+#define ARCH_CPU_64_BITS 1
+#define ARCH_CPU_LITTLE_ENDIAN 1
+#else
 #define ARCH_CPU_MIPS_FAMILY 1
 #define ARCH_CPU_MIPSEL 1
 #define ARCH_CPU_32_BITS 1
 #define ARCH_CPU_LITTLE_ENDIAN 1
+#endif
 #else
 #error Please add support for your architecture in build/build_config.h
 #endif
@@ -141,12 +154,6 @@
 #define WCHAR_T_IS_UTF16
 #else
 #error Please add support for your compiler in build/build_config.h
-#endif
-
-#if defined(__ARMEL__) && !defined(OS_IOS)
-#define WCHAR_T_IS_UNSIGNED 1
-#elif defined(__MIPSEL__)
-#define WCHAR_T_IS_UNSIGNED 0
 #endif
 
 #if defined(OS_ANDROID)

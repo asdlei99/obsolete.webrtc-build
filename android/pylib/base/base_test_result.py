@@ -7,6 +7,7 @@
 class ResultType(object):
   """Class enumerating test types."""
   PASS = 'PASS'
+  SKIP = 'SKIP'
   FAIL = 'FAIL'
   CRASH = 'CRASH'
   TIMEOUT = 'TIMEOUT'
@@ -15,25 +16,27 @@ class ResultType(object):
   @staticmethod
   def GetTypes():
     """Get a list of all test types."""
-    return [ResultType.PASS, ResultType.FAIL, ResultType.CRASH,
-            ResultType.TIMEOUT, ResultType.UNKNOWN]
+    return [ResultType.PASS, ResultType.SKIP, ResultType.FAIL,
+            ResultType.CRASH, ResultType.TIMEOUT, ResultType.UNKNOWN]
 
 
 class BaseTestResult(object):
   """Base class for a single test result."""
 
-  def __init__(self, name, test_type, log=''):
+  def __init__(self, name, test_type, duration=0, log=''):
     """Construct a BaseTestResult.
 
     Args:
       name: Name of the test which defines uniqueness.
       test_type: Type of the test result as defined in ResultType.
+      duration: Time it took for the test to run in milliseconds.
       log: An optional string listing any errors.
     """
     assert name
     assert test_type in ResultType.GetTypes()
     self._name = name
     self._test_type = test_type
+    self._duration = duration
     self._log = log
 
   def __str__(self):
@@ -65,6 +68,10 @@ class BaseTestResult(object):
     """Get the test result type."""
     return self._test_type
 
+  def GetDuration(self):
+    """Get the test duration."""
+    return self._duration
+
   def GetLog(self):
     """Get the test log."""
     return self._log
@@ -88,16 +95,35 @@ class TestRunResults(object):
             s.append(log)
     return '\n'.join(s)
 
-  def GetLongForm(self):
-    """Get the long string representation of this object."""
+  def GetGtestForm(self):
+    """Get the gtest string representation of this object."""
     s = []
-    s.append('ALL (%d tests)' % len(self._results))
-    for test_type in ResultType.GetTypes():
-      tests = sorted(self._GetType(test_type))
-      if test_type == ResultType.PASS:
-        s.append('%s (%d tests)' % (test_type, len(tests)))
-      else:
-        s.append('%s (%d tests): %s' % (test_type, len(tests), tests))
+    plural = lambda n, s, p: '%d %s' % (n, p if n != 1 else s)
+    tests = lambda n: plural(n, 'test', 'tests')
+
+    s.append('[==========] %s ran.' % (tests(len(self.GetAll()))))
+    s.append('[  PASSED  ] %s.' % (tests(len(self.GetPass()))))
+
+    skipped = self.GetSkip()
+    if skipped:
+      s.append('[  SKIPPED ] Skipped %s, listed below:' % tests(len(skipped)))
+      for t in sorted(skipped):
+        s.append('[  SKIPPED ] %s' % str(t))
+
+    all_failures = self.GetFail().union(self.GetCrash(), self.GetTimeout(),
+        self.GetUnknown())
+    if all_failures:
+      s.append('[  FAILED  ] %s, listed below:' % tests(len(all_failures)))
+      for t in sorted(self.GetFail()):
+        s.append('[  FAILED  ] %s' % str(t))
+      for t in sorted(self.GetCrash()):
+        s.append('[  FAILED  ] %s (CRASHED)' % str(t))
+      for t in sorted(self.GetTimeout()):
+        s.append('[  FAILED  ] %s (TIMEOUT)' % str(t))
+      for t in sorted(self.GetUnknown()):
+        s.append('[  FAILED  ] %s (UNKNOWN)' % str(t))
+      s.append('')
+      s.append(plural(len(all_failures), 'FAILED TEST', 'FAILED TESTS'))
     return '\n'.join(s)
 
   def GetShortForm(self):
@@ -151,6 +177,10 @@ class TestRunResults(object):
     """Get the set of all passed test results."""
     return self._GetType(ResultType.PASS)
 
+  def GetSkip(self):
+    """Get the set of all skipped test results."""
+    return self._GetType(ResultType.SKIP)
+
   def GetFail(self):
     """Get the set of all failed test results."""
     return self._GetType(ResultType.FAIL)
@@ -173,4 +203,5 @@ class TestRunResults(object):
 
   def DidRunPass(self):
     """Return whether the test run was successful."""
-    return not self.GetNotPass()
+    return not self.GetNotPass() - self.GetSkip()
+

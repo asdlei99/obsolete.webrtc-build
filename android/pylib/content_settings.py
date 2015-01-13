@@ -2,6 +2,8 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+from pylib import constants
+
 
 class ContentSettings(dict):
 
@@ -10,17 +12,13 @@ class ContentSettings(dict):
   System properties are key/value pairs as exposed by adb shell content.
   """
 
-  def __init__(self, table, adb):
+  def __init__(self, table, device):
     super(ContentSettings, self).__init__()
-    try:
-      sdk_version = int(adb.system_properties['ro.build.version.sdk'])
-      assert sdk_version >= 16, (
-          'ContentSettings supported only on SDK 16 and later')
-    except ValueError:
-      assert False, ('Unknown SDK version %s' %
-          adb.system_properties['ro.build.version.sdk'])
+    assert (device.build_version_sdk
+            >= constants.ANDROID_SDK_VERSION_CODES.JELLY_BEAN), (
+        'ContentSettings supported only on SDK 16 and later')
     self._table = table
-    self._adb = adb
+    self._device = device
 
   @staticmethod
   def _GetTypeBinding(value):
@@ -39,8 +37,8 @@ class ContentSettings(dict):
   def iteritems(self):
     # Example row:
     # 'Row: 0 _id=13, name=logging_id2, value=-1fccbaa546705b05'
-    for row in self._adb.RunShellCommandWithSU(
-        'content query --uri content://%s' % self._table):
+    for row in self._device.RunShellCommand(
+        'content query --uri content://%s' % self._table, as_root=True):
       fields = row.split(', ')
       key = None
       value = None
@@ -50,32 +48,38 @@ class ContentSettings(dict):
           key = v
         elif k == 'value':
           value = v
-      assert key, value
+      if not key:
+        continue
+      if not value:
+        value = ''
       yield key, value
 
   def __getitem__(self, key):
-    return self._adb.RunShellCommandWithSU(
+    return self._device.RunShellCommand(
         'content query --uri content://%s --where "name=\'%s\'" '
-        '--projection value' % (self._table, key)).strip()
+        '--projection value' % (self._table, key), as_root=True).strip()
 
   def __setitem__(self, key, value):
     if key in self:
-      self._adb.RunShellCommandWithSU(
+      self._device.RunShellCommand(
           'content update --uri content://%s '
           '--bind value:%s:%s --where "name=\'%s\'"' % (
               self._table,
-              self._GetTypeBinding(value), value, key))
+              self._GetTypeBinding(value), value, key),
+          as_root=True)
     else:
-      self._adb.RunShellCommandWithSU(
+      self._device.RunShellCommand(
           'content insert --uri content://%s '
           '--bind name:%s:%s --bind value:%s:%s' % (
               self._table,
               self._GetTypeBinding(key), key,
-              self._GetTypeBinding(value), value))
+              self._GetTypeBinding(value), value),
+          as_root=True)
 
   def __delitem__(self, key):
-    self._adb.RunShellCommandWithSU(
+    self._device.RunShellCommand(
         'content delete --uri content://%s '
         '--bind name:%s:%s' % (
             self._table,
-            self._GetTypeBinding(key), key))
+            self._GetTypeBinding(key), key),
+        as_root=True)

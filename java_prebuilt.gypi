@@ -27,6 +27,7 @@
     'intermediate_dir': '<(SHARED_INTERMEDIATE_DIR)/<(_target_name)',
     'android_jar': '<(android_sdk)/android.jar',
     'input_jars_paths': [ '<(android_jar)' ],
+    'neverlink%': 0,
     'proguard_config%': '',
     'proguard_preprocess%': '0',
     'variables': {
@@ -46,7 +47,13 @@
   'all_dependent_settings': {
     'variables': {
       'input_jars_paths': ['<(dex_input_jar_path)'],
-      'library_dexed_jars_paths': ['<(dex_path)'],
+      'conditions': [
+        ['neverlink == 1', {
+          'library_dexed_jars_paths': [],
+        }, {
+          'library_dexed_jars_paths': ['<(dex_path)'],
+        }],
+      ],
     },
   },
   'conditions' : [
@@ -56,7 +63,7 @@
           'action_name': 'proguard_<(_target_name)',
           'message': 'Proguard preprocessing <(_target_name) jar',
           'inputs': [
-            '<(android_sdk_root)/tools/proguard/bin/proguard.sh',
+            '<(android_sdk_root)/tools/proguard/lib/proguard.jar',
             '<(DEPTH)/build/android/gyp/util/build_utils.py',
             '<(DEPTH)/build/android/gyp/proguard.py',
             '<(jar_path)',
@@ -67,7 +74,7 @@
           ],
           'action': [
             'python', '<(DEPTH)/build/android/gyp/proguard.py',
-            '--proguard-path=<(android_sdk_root)/tools/proguard/bin/proguard.sh',
+            '--proguard-path=<(android_sdk_root)/tools/proguard/lib/proguard.jar',
             '--input-path=<(jar_path)',
             '--output-path=<(dex_input_jar_path)',
             '--proguard-config=<(proguard_config)',
@@ -76,26 +83,20 @@
         },
       ],
     }],
-  ],
-  'actions': [
-    {
-      'action_name': 'dex_<(_target_name)',
-      'message': 'Dexing <(_target_name) jar',
-      'inputs': [
-        '<(DEPTH)/build/android/gyp/util/build_utils.py',
-        '<(DEPTH)/build/android/gyp/dex.py',
-        '<(dex_input_jar_path)',
+    ['neverlink == 0', {
+      'actions': [
+        {
+          'action_name': 'dex_<(_target_name)',
+          'message': 'Dexing <(_target_name) jar',
+          'variables': {
+            'dex_input_paths': [
+              '<(dex_input_jar_path)',
+            ],
+            'output_path': '<(dex_path)',
+          },
+          'includes': [ 'android/dex_action.gypi' ],
+        },
       ],
-      'outputs': [
-        '<(dex_path)',
-      ],
-      'action': [
-        'python', '<(DEPTH)/build/android/gyp/dex.py',
-        '--dex-path=<(dex_path)',
-        '--android-sdk-tools=<(android_sdk_tools)',
-        '<(dex_input_jar_path)',
-      ]
-    },
-
+    }],
   ],
 }

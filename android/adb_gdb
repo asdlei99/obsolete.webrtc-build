@@ -16,7 +16,7 @@ PROGNAME=$(basename "$0")
 PROGDIR=$(dirname "$0")
 
 # Location of Chromium-top-level sources.
-CHROMIUM_SRC=$(cd "$PROGDIR"/../.. && pwd 2>/dev/null)
+CHROMIUM_SRC=$(cd "$PROGDIR"/../.. >/dev/null && pwd 2>/dev/null)
 
 # Location of Chromium out/ directory.
 if [ -z "$CHROMIUM_OUT_DIR" ]; then
@@ -245,12 +245,7 @@ them up automatically for you though:
    - host gdb client (e.g. arm-linux-androideabi-gdb)
    - directory with symbolic version of $PROGRAM_NAME's shared libraries.
 
-If you have sourced Chromium's build/android/envsetup.sh, this script will
-find all of them automatically. This is the recommended way to use it.
-
-Otherwise, if you have ANDROID_NDK_ROOT defined in your environment,
-the script will use it to find the gdb and gdbserver binaries. You can
-also use --ndk-dir=<path> to specify an alternative NDK installation
+You can also use --ndk-dir=<path> to specify an alternative NDK installation
 directory.
 
 The script tries to find the most recent version of the debug version of
@@ -325,6 +320,7 @@ Valid options:
   --su-prefix=<prefix>  Prepend <prefix> to 'adb shell' commands that are
                         run by this script. This can be useful to use
                         the 'su' program on rooted production devices.
+                        e.g. --su-prefix="su -c"
 
   --pull-libs           Force system libraries extraction.
   --no-pull-libs        Do not extract any system library.
@@ -342,10 +338,8 @@ if [ -z "$PACKAGE_NAME" ]; then
 fi
 
 if [ -z "$NDK_DIR" ]; then
-  if [ -z "$ANDROID_NDK_ROOT" ]; then
-    panic "Can't find NDK directory, please source \
-build/android/envsetup.sh!"
-  fi
+  ANDROID_NDK_ROOT=$(PYTHONPATH=$CHROMIUM_SRC/build/android python -c \
+'from pylib.constants import ANDROID_NDK_ROOT; print ANDROID_NDK_ROOT,')
 else
   if [ ! -d "$NDK_DIR" ]; then
     panic "Invalid directory: $NDK_DIR"
@@ -368,7 +362,7 @@ get_gyp_target_arch () {
                cut -d= -f2)
   case $ARCH in
     ia32|i?86|x86) echo "x86";;
-    mips|arm) echo "$ARCH";;
+    mips|arm|arm64|x86_64) echo "$ARCH";;
     *) echo "";
   esac
 }
@@ -436,8 +430,14 @@ get_arch_gnu_config () {
     arm)
       echo "arm-linux-androideabi"
       ;;
+    arm64)
+      echo "aarch64-linux-android"
+      ;;
     x86)
       echo "i686-linux-android"
+      ;;
+    x86_64)
+      echo "x86_64-linux-android"
       ;;
     mips)
       echo "mipsel-linux-android"
@@ -473,9 +473,9 @@ get_ndk_toolchain_prebuilt () {
   local SUBPATH="$3"
   local NAME="$(get_arch_toolchain_prefix $ARCH)"
   local FILE TARGET
-  FILE=$NDK_DIR/toolchains/$NAME-4.6/prebuilt/$SUBPATH
+  FILE=$NDK_DIR/toolchains/$NAME-4.9/prebuilt/$SUBPATH
   if [ ! -f "$FILE" ]; then
-    FILE=$NDK_DIR/toolchains/$NAME-4.4.3/prebuilt/$SUBPATH
+    FILE=$NDK_DIR/toolchains/$NAME-4.8/prebuilt/$SUBPATH
     if [ ! -f "$FILE" ]; then
       FILE=
     fi
@@ -850,7 +850,7 @@ if [ "$SU_PREFIX" ]; then
     cat $SU_PREFIX_TEST_LOG
     exit 1
   fi
-  COMMAND_PREFIX=$SU_PREFIX
+  COMMAND_PREFIX="$SU_PREFIX"
 else
   SHELL_UID=$(adb shell cat /proc/self/status | \
               awk '$1 == "Uid:" { print $2; }')
@@ -911,9 +911,15 @@ PORT=5039
 HOST_PORT=$PORT
 TARGET_PORT=$PORT
 
+# Select correct app_process for architecture.
+case $TARGET_ARCH in
+      arm|x86|mips) GDBEXEC=app_process;;
+      arm64|x86_64) GDBEXEC=app_process64;;
+      *) fail_panic "Unknown app_process for architecture!";;
+esac
+
 # Detect AddressSanitizer setup on the device. In that case app_process is a
 # script, and the real executable is app_process.real.
-GDBEXEC=app_process
 GDBEXEC_ASAN=app_process.real
 adb_shell ls /system/bin/$GDBEXEC_ASAN
 if [ $? == 0 ]; then
@@ -955,15 +961,35 @@ log "Job control: $(jobs -l)"
 STATE=$(jobs -l | awk '$2 == "'$GDBSERVER_PID'" { print $3; }')
 if [ "$STATE" != "Running" ]; then
   echo "ERROR: GDBServer could not attach to PID $PID!"
-  echo "Failure log (use --verbose for more information):"
-  cat $GDBSERVER_LOG
-  exit 1
+  if [ $(adb_shell su -c getenforce) != "Permissive" ];  then
+    echo "Device mode is Enforcing. Changing Device mode to Permissive "
+    $(adb_shell su -c setenforce 0)
+    if [ $(adb_shell su -c getenforce) != "Permissive" ]; then
+      echo "ERROR: Failed to Change Device mode to Permissive"
+      echo "Failure log (use --verbose for more information):"
+      cat $GDBSERVER_LOG
+      exit 1
+    fi
+  else
+    echo "Failure log (use --verbose for more information):"
+    cat $GDBSERVER_LOG
+    exit 1
+  fi
 fi
 
 # Generate a file containing useful GDB initialization commands
 readonly COMMANDS=$TMPDIR/gdb.init
 log "Generating GDB initialization commands file: $COMMANDS"
 echo -n "" > $COMMANDS
+echo "set print pretty 1" >> $COMMANDS
+echo "python" >> $COMMANDS
+echo "import sys" >> $COMMANDS
+echo "sys.path.insert(0, '$CHROMIUM_SRC/tools/gdb/')" >> $COMMANDS
+echo "try:" >> $COMMANDS
+echo "  import gdb_chrome" >> $COMMANDS
+echo "finally:" >> $COMMANDS
+echo "  sys.path.pop(0)" >> $COMMANDS
+echo "end" >> $COMMANDS
 echo "file $TMPDIR/$GDBEXEC" >> $COMMANDS
 echo "directory $CHROMIUM_SRC" >> $COMMANDS
 echo "set solib-absolute-prefix $PULL_LIBS_DIR" >> $COMMANDS
@@ -983,6 +1009,6 @@ if [ "$VERBOSE" -gt 0 ]; then
   echo "### END $COMMANDS"
 fi
 
-log "Launching gdb client: $GDB $GDBARGS -x $COMMANDS"
-$GDB $GDBARGS -x $COMMANDS &&
+log "Launching gdb client: $GDB $GDB_ARGS -x $COMMANDS"
+$GDB $GDB_ARGS -x $COMMANDS &&
 rm -f "$GDBSERVER_PIDFILE"

@@ -2,15 +2,23 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/allocator.gni")
 import("//build/config/crypto.gni")
 import("//build/config/features.gni")
 import("//build/config/ui.gni")
+import("//build/module_args/v8.gni")
 
 declare_args() {
   # When set, turns off the (normally-on) iterator debugging and related stuff
   # that is normally turned on for Debug builds. These are generally useful for
   # catching bugs but in some cases may cause conflicts or excessive slowness.
   disable_iterator_debugging = false
+
+  # Set to true to not store any build metadata (this isn't working yet but
+  # this flag will help us to get there). See http://crbug.com/314403.
+  # TODO(sebmarchand): Update this comment once this flag guarantee that
+  #     there's no build metadata in the build artifacts.
+  dont_embed_build_metadata = false
 }
 
 # TODO(brettw) Most of these should be removed. Instead of global feature
@@ -23,29 +31,8 @@ declare_args() {
 config("feature_flags") {
   # TODO(brettw) most of these need to be parameterized.
   defines = [
-      "CHROMIUM_BUILD",
-      "USE_LIBJPEG_TURBO=1",
-      "ENABLE_ONE_CLICK_SIGNIN",
-      "ENABLE_REMOTING=1",
-      "ENABLE_WEBRTC=1",
-      "ENABLE_CONFIGURATION_POLICY",
-      "ENABLE_INPUT_SPEECH",
-      "ENABLE_NOTIFICATIONS",
-      "ENABLE_EGLIMAGE=1",
-      "ENABLE_TASK_MANAGER=1",
-      "ENABLE_EXTENSIONS=1",
-      "ENABLE_PLUGIN_INSTALLATION=1",
-      "ENABLE_SESSION_SERVICE=1",
-      "ENABLE_THEMES=1",
-      "ENABLE_AUTOFILL_DIALOG=1",
-      "ENABLE_BACKGROUND=1",
-      "ENABLE_AUTOMATION=1",
-      "ENABLE_GOOGLE_NOW=1",
-      "ENABLE_CAPTIVE_PORTAL_DETECTION=1",
-      "ENABLE_APP_LIST=1",
-      "ENABLE_SETTINGS_APP=1",
-      "ENABLE_MANAGED_USERS=1",
-      "V8_DEPRECATION_WARNINGS",  # Don't use deprecated V8 APIs anywhere.
+    "CHROMIUM_BUILD",
+    "V8_DEPRECATION_WARNINGS",  # Don't use deprecated V8 APIs anywhere.
   ]
 
   if (cld_version > 0) {
@@ -54,21 +41,38 @@ config("feature_flags") {
   if (enable_mdns) {
     defines += [ "ENABLE_MDNS=1" ]
   }
+  if (enable_notifications) {
+    defines += [ "ENABLE_NOTIFICATIONS" ]
+  }
   if (enable_pepper_cdms) {
     # TODO(brettw) should probably be "=1"
     defines += [ "ENABLE_PEPPER_CDMS" ]
   }
+  if (enable_browser_cdms) {
+    # TODO(brettw) should probably be "=1"
+    defines += [ "ENABLE_BROWSER_CDMS" ]
+  }
   if (enable_plugins) {
     defines += [ "ENABLE_PLUGINS=1" ]
   }
-  if (enable_printing > 0) {
+  if (enable_basic_printing || enable_print_preview) {
+    # Convenience define for ENABLE_BASIC_PRINTING || ENABLE_PRINT_PREVIEW.
     defines += [ "ENABLE_PRINTING=1" ]
-    if (enable_printing < 2) {
-      defines += [ "ENABLE_FULL_PRINTING=1" ]
+    if (enable_basic_printing) {
+      # Enable basic printing support and UI.
+      defines += [ "ENABLE_BASIC_PRINTING=1" ]
+    }
+    if (enable_print_preview) {
+      # Enable printing with print preview.
+      # Can be defined without ENABLE_BASIC_PRINTING.
+      defines += [ "ENABLE_PRINT_PREVIEW=1" ]
     }
   }
   if (enable_spellcheck) {
     defines += [ "ENABLE_SPELLCHECK=1" ]
+  }
+  if (dont_embed_build_metadata) {
+    defines += [ "DONT_EMBED_BUILD_METADATA" ]
   }
   if (use_udev) {
     # TODO(brettw) should probably be "=1".
@@ -87,6 +91,9 @@ config("feature_flags") {
   if (use_aura) {
     defines += [ "USE_AURA=1" ]
   }
+  if (use_pango) {
+    defines += [ "USE_PANGO=1" ]
+  }
   if (use_cairo) {
     defines += [ "USE_CAIRO=1" ]
   }
@@ -99,20 +106,110 @@ config("feature_flags") {
   if (use_glib) {
     defines += [ "USE_GLIB=1" ]
   }
-  if (use_nss) {
-    defines += [ "USE_NSS=1" ]
-  }
   if (use_openssl) {
     defines += [ "USE_OPENSSL=1" ]
+    if (use_openssl_certs) {
+      defines += [ "USE_OPENSSL_CERTS=1" ]
+    }
+  } else if (use_nss_certs) {
+    # USE_NSS really means "use nss for certificate validation and storage"
+    # (like USE_OPENSSL_CERTS) and not "we're linking to NSS." It might be nice
+    # to rename this but we're hoping to transition away from NSS.
+    defines += [ "USE_NSS=1" ]
   }
   if (use_ozone) {
     defines += [ "USE_OZONE=1" ]
   }
   if (use_x11) {
     defines += [ "USE_X11=1" ]
-    if (use_xi2_mt > 0) {
-      defines += [ "USE_XI2_MT=$use_xi2_mt" ]
-    }
+  }
+  if (use_allocator != "tcmalloc") {
+    defines += [ "NO_TCMALLOC" ]
+  }
+  if (is_asan) {
+    defines += [
+      "ADDRESS_SANITIZER",
+      "MEMORY_TOOL_REPLACES_ALLOCATOR",
+      "MEMORY_SANITIZER_INITIAL_SIZE",
+    ]
+  }
+  if (enable_webrtc) {
+    defines += [ "ENABLE_WEBRTC=1" ]
+  }
+  if (disable_ftp_support) {
+    defines += [ "DISABLE_FTP_SUPPORT=1" ]
+  }
+  if (!enable_nacl) {
+    defines += [ "DISABLE_NACL" ]
+  }
+  if (enable_extensions) {
+    defines += [ "ENABLE_EXTENSIONS=1" ]
+  }
+  if (enable_configuration_policy) {
+    defines += [ "ENABLE_CONFIGURATION_POLICY" ]
+  }
+  if (enable_task_manager) {
+    defines += [ "ENABLE_TASK_MANAGER=1" ]
+  }
+  if (enable_themes) {
+    defines += [ "ENABLE_THEMES=1" ]
+  }
+  if (enable_captive_portal_detection) {
+    defines += [ "ENABLE_CAPTIVE_PORTAL_DETECTION=1" ]
+  }
+  if (enable_session_service) {
+    defines += [ "ENABLE_SESSION_SERVICE=1" ]
+  }
+  if (enable_rlz) {
+    defines += [ "ENABLE_RLZ" ]
+  }
+  if (enable_plugin_installation) {
+    defines += [ "ENABLE_PLUGIN_INSTALLATION=1" ]
+  }
+  if (enable_app_list) {
+    defines += [ "ENABLE_APP_LIST=1" ]
+  }
+  if (enable_settings_app) {
+    defines += [ "ENABLE_SETTINGS_APP=1" ]
+  }
+  if (enable_supervised_users) {
+    defines += [ "ENABLE_SUPERVISED_USERS=1" ]
+  }
+  if (enable_service_discovery) {
+    defines += [ "ENABLE_SERVICE_DISCOVERY=1" ]
+  }
+  if (enable_autofill_dialog) {
+    defines += [ "ENABLE_AUTOFILL_DIALOG=1" ]
+  }
+  if (enable_wifi_bootstrapping) {
+    defines += [ "ENABLE_WIFI_BOOTSTRAPPING=1" ]
+  }
+  if (enable_image_loader_extension) {
+    defines += [ "IMAGE_LOADER_EXTENSION=1" ]
+  }
+  if (enable_remoting) {
+    defines += [ "ENABLE_REMOTING=1" ]
+  }
+  if (enable_google_now) {
+    defines += [ "ENABLE_GOOGLE_NOW=1" ]
+  }
+  if (enable_one_click_signin) {
+    defines += [ "ENABLE_ONE_CLICK_SIGNIN" ]
+  }
+  if (use_athena) {
+    defines += [ "USE_ATHENA=1" ]
+  }
+  if (enable_hidpi) {
+    defines += [ "ENABLE_HIDPI=1" ]
+  }
+  if (proprietary_codecs) {
+    defines += [ "USE_PROPRIETARY_CODECS" ]
+  }
+  if (enable_hangout_services_extension) {
+    defines += [ "ENABLE_HANGOUT_SERVICES_EXTENSION=1" ]
+  }
+  if (v8_use_external_startup_data) {
+    defines += [ "V8_USE_EXTERNAL_STARTUP_DATA" ]
   }
 }
 
@@ -141,6 +238,7 @@ config("debug") {
 }
 
 config("release") {
+  defines = [ "NDEBUG" ]
 }
 
 # Default libraries ------------------------------------------------------------
@@ -175,6 +273,11 @@ config("default_libs") {
       "winmm.lib",
       "winspool.lib",
       "ws2_32.lib",
+
+      # Please don't add more stuff here. We should actually be making this
+      # list smaller, since all common things should be covered. If you need
+      # some extra libraries, please just add a libs = [ "foo.lib" ] to your
+      # target that needs it.
     ]
   } else if (is_android) {
     # Android uses -nostdlib so we need to add even libc here.
@@ -187,7 +290,7 @@ config("default_libs") {
       #   '<!(<(android_toolchain)/*-gcc -print-libgcc-file-name)',
       "c",
       "dl",
-      "m"
+      "m",
     ]
   } else if (is_mac) {
     libs = [
@@ -208,8 +311,6 @@ config("default_libs") {
       "UIKit.framework",
     ]
   } else if (is_linux) {
-    libs = [
-      "dl",
-    ]
+    libs = [ "dl" ]
   }
 }

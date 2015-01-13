@@ -13,22 +13,21 @@ import sys
 
 from pylib import android_commands
 from pylib import screenshot
-
+from pylib.device import device_utils
 
 def _PrintMessage(heading, eol='\n'):
   sys.stdout.write('%s%s' % (heading, eol))
   sys.stdout.flush()
 
 
-def _CaptureScreenshot(adb, host_file):
-  host_file = adb.TakeScreenshot(host_file)
+def _CaptureScreenshot(device, host_file):
+  host_file = device.TakeScreenshot(host_file)
   _PrintMessage('Screenshot written to %s' % os.path.abspath(host_file))
 
 
-def _CaptureVideo(adb, host_file, options):
+def _CaptureVideo(device, host_file, options):
   size = tuple(map(int, options.size.split('x'))) if options.size else None
-  recorder = screenshot.VideoRecorder(adb,
-                                      host_file,
+  recorder = screenshot.VideoRecorder(device,
                                       megabits_per_second=options.bitrate,
                                       size=size,
                                       rotate=options.rotate)
@@ -38,7 +37,7 @@ def _CaptureVideo(adb, host_file, options):
     raw_input()
   finally:
     recorder.Stop()
-  host_file = recorder.Pull()
+  host_file = recorder.Pull(host_file)
   _PrintMessage('Video written to %s' % os.path.abspath(host_file))
 
 
@@ -70,19 +69,23 @@ def main():
   if options.verbose:
     logging.getLogger().setLevel(logging.DEBUG)
 
-  if not options.device and len(android_commands.GetAttachedDevices()) > 1:
+  devices = android_commands.GetAttachedDevices()
+
+  if not options.device and len(devices) > 1:
     parser.error('Multiple devices are attached. '
                  'Please specify device serial number with --device.')
+  elif not options.device and len(devices) == 1:
+    options.device = devices[0]
 
   if len(args) > 1:
     parser.error('Too many positional arguments.')
   host_file = args[0] if args else options.file
-  adb = android_commands.AndroidCommands(options.device)
+  device = device_utils.DeviceUtils(options.device)
 
   if options.video:
-    _CaptureVideo(adb, host_file, options)
+    _CaptureVideo(device, host_file, options)
   else:
-    _CaptureScreenshot(adb, host_file)
+    _CaptureScreenshot(device, host_file)
   return 0
 
 

@@ -8,8 +8,9 @@
 # is invoked by Chromium beyond what can be done in the gclient hooks.
 
 import glob
-import gyp_helper
+import gyp_environment
 import os
+import re
 import shlex
 import subprocess
 import string
@@ -26,10 +27,12 @@ import gyp
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Add paths so that pymod_do_main(...) can import files.
+sys.path.insert(1, os.path.join(chrome_src, 'build', 'android', 'gyp'))
 sys.path.insert(1, os.path.join(chrome_src, 'tools'))
 sys.path.insert(1, os.path.join(chrome_src, 'tools', 'generate_shim_headers'))
 sys.path.insert(1, os.path.join(chrome_src, 'tools', 'grit'))
 sys.path.insert(1, os.path.join(chrome_src, 'chrome', 'tools', 'build'))
+sys.path.insert(1, os.path.join(chrome_src, 'chromecast', 'tools', 'build'))
 sys.path.insert(1, os.path.join(chrome_src, 'native_client', 'build'))
 sys.path.insert(1, os.path.join(chrome_src, 'native_client_sdk', 'src',
     'build_tools'))
@@ -175,6 +178,9 @@ def additional_include_files(supplemental_files, args=[]):
     if os.path.realpath(path) not in specified_includes:
       result.append(path)
 
+  if os.environ.get('GYP_INCLUDE_FIRST') != None:
+    AddInclude(os.path.join(chrome_src, os.environ.get('GYP_INCLUDE_FIRST')))
+
   # Always include common.gypi.
   AddInclude(os.path.join(script_dir, 'common.gypi'))
 
@@ -182,11 +188,28 @@ def additional_include_files(supplemental_files, args=[]):
   for supplement in supplemental_files:
     AddInclude(supplement)
 
+  if os.environ.get('GYP_INCLUDE_LAST') != None:
+    AddInclude(os.path.join(chrome_src, os.environ.get('GYP_INCLUDE_LAST')))
+
   return result
 
 
 if __name__ == '__main__':
+  # Disabling garbage collection saves about 1 second out of 16 on a Linux
+  # z620 workstation. Since this is a short-lived process it's not a problem to
+  # leak a few cyclyc references in order to spare the CPU cycles for
+  # scanning the heap.
+  import gc
+  gc.disable()
+
   args = sys.argv[1:]
+
+  use_analyzer = len(args) and args[0] == '--analyzer'
+  if use_analyzer:
+    args.pop(0)
+    os.environ['GYP_GENERATORS'] = 'analyzer'
+    args.append('-Gconfig_path=' + args.pop(0))
+    args.append('-Ganalyzer_output_path=' + args.pop(0))
 
   if int(os.environ.get('GYP_CHROMIUM_NO_ACTION', 0)):
     print 'Skipping gyp_chromium due to GYP_CHROMIUM_NO_ACTION env var.'
@@ -213,8 +236,6 @@ if __name__ == '__main__':
     p.communicate()
     sys.exit(p.returncode)
 
-  gyp_helper.apply_chromium_gyp_env()
-
   # This could give false positives since it doesn't actually do real option
   # parsing.  Oh well.
   gyp_file_specified = False
@@ -222,6 +243,8 @@ if __name__ == '__main__':
     if arg.endswith('.gyp'):
       gyp_file_specified = True
       break
+
+  gyp_environment.SetEnvironment()
 
   # If we didn't get a file, check an env var, and then fall back to
   # assuming 'all.gyp' from the same directory as the script.
@@ -248,24 +271,9 @@ if __name__ == '__main__':
 
   # We explicitly don't support the make gyp generator (crbug.com/348686). Be
   # nice and fail here, rather than choking in gyp.
-  if 'make' in os.environ.get('GYP_GENERATORS', ''):
+  if re.search(r'(^|,|\s)make($|,|\s)', os.environ.get('GYP_GENERATORS', '')):
     print 'Error: make gyp generator not supported (check GYP_GENERATORS).'
     sys.exit(1)
-
-  # Default to ninja on linux and windows, but only if no generator has
-  # explicitly been set.
-  # Also default to ninja on mac, but only when not building chrome/ios.
-  # . -f / --format has precedence over the env var, no need to check for it
-  # . set the env var only if it hasn't been set yet
-  # . chromium.gyp_env has been applied to os.environ at this point already
-  if sys.platform.startswith(('linux', 'win', 'freebsd')) and \
-      not os.environ.get('GYP_GENERATORS'):
-    os.environ['GYP_GENERATORS'] = 'ninja'
-  elif sys.platform == 'darwin' and not os.environ.get('GYP_GENERATORS') and \
-      not 'OS=ios' in os.environ.get('GYP_DEFINES', []):
-    os.environ['GYP_GENERATORS'] = 'ninja'
-
-  vs2013_runtime_dll_dirs = vs_toolchain.DownloadVsToolchain()
 
   # If CHROMIUM_GYP_SYNTAX_CHECK is set to 1, it will invoke gyp with --check
   # to enfore syntax checking.
@@ -276,6 +284,17 @@ if __name__ == '__main__':
   supplemental_includes = GetSupplementalFiles()
   gyp_vars_dict = GetGypVars(supplemental_includes)
 
+  # TODO(dmikurube): Remove these checks and messages after a while.
+  if ('linux_use_tcmalloc' in gyp_vars_dict or
+      'android_use_tcmalloc' in gyp_vars_dict):
+    print '*****************************************************************'
+    print '"linux_use_tcmalloc" and "android_use_tcmalloc" are deprecated!'
+    print '-----------------------------------------------------------------'
+    print 'You specify "linux_use_tcmalloc" or "android_use_tcmalloc" in'
+    print 'your GYP_DEFINES. Please switch them into "use_allocator" now.'
+    print 'See http://crbug.com/345554 for the details.'
+    print '*****************************************************************'
+
   # Automatically turn on crosscompile support for platforms that need it.
   # (The Chrome OS build sets CC_host / CC_target which implicitly enables
   # this mode.)
@@ -283,28 +302,26 @@ if __name__ == '__main__':
           gyp_vars_dict.get('OS') in ['android', 'ios'],
           'GYP_CROSSCOMPILE' not in os.environ)):
     os.environ['GYP_CROSSCOMPILE'] = '1'
+  if gyp_vars_dict.get('OS') == 'android':
+    args.append('--check')
 
   args.extend(
       ['-I' + i for i in additional_include_files(supplemental_includes, args)])
 
   args.extend(['-D', 'gyp_output_dir=' + GetOutputDirectory()])
 
-  print 'Updating projects from gyp files...'
-  sys.stdout.flush()
+  if not use_analyzer:
+    print 'Updating projects from gyp files...'
+    sys.stdout.flush()
 
   # Off we go...
   gyp_rc = gyp.main(args)
 
-  # Check for landmines (reasons to clobber the build). This must be run here,
-  # rather than a separate runhooks step so that any environment modifications
-  # from above are picked up.
-  print 'Running build/landmines.py...'
-  subprocess.check_call(
-      [sys.executable, os.path.join(script_dir, 'landmines.py')])
-
-  if vs2013_runtime_dll_dirs:
-    x64_runtime, x86_runtime = vs2013_runtime_dll_dirs
-    vs_toolchain.CopyVsRuntimeDlls(
+  if not use_analyzer:
+    vs2013_runtime_dll_dirs = vs_toolchain.SetEnvironmentAndGetRuntimeDllDirs()
+    if vs2013_runtime_dll_dirs:
+      x64_runtime, x86_runtime = vs2013_runtime_dll_dirs
+      vs_toolchain.CopyVsRuntimeDlls(
         os.path.join(chrome_src, GetOutputDirectory()),
         (x86_runtime, x64_runtime))
 

@@ -10,7 +10,7 @@ import random
 from pylib import constants
 from pylib.base import base_test_result
 from pylib.base import base_test_runner
-
+from pylib.device import intent
 
 class TestRunner(base_test_runner.BaseTestRunner):
   """A TestRunner instance runs a monkey test on a single device."""
@@ -40,7 +40,7 @@ class TestRunner(base_test_runner.BaseTestRunner):
            '--kill-process-after-error',
            self._options.extra_args,
            '%d' % self._options.event_count]
-    return self.adb.RunShellCommand(' '.join(cmd), timeout_time=timeout_ms)
+    return self.device.RunShellCommand(' '.join(cmd), timeout=timeout_ms)
 
   def RunTest(self, test_name):
     """Run a Monkey test on the device.
@@ -51,30 +51,29 @@ class TestRunner(base_test_runner.BaseTestRunner):
     Returns:
       A tuple of (TestRunResults, retry).
     """
-    self.adb.StartActivity(self._package,
-                           self._activity,
-                           wait_for_completion=True,
-                           action='android.intent.action.MAIN',
-                           force_stop=True)
+    self.device.StartActivity(
+        intent.Intent(package=self._package, activity=self._activity,
+                      action='android.intent.action.MAIN'),
+        blocking=True, force_stop=True)
 
     # Chrome crashes are not always caught by Monkey test runner.
     # Verify Chrome has the same PID before and after the test.
-    before_pids = self.adb.ExtractPid(self._package)
+    before_pids = self.device.GetPids(self._package)
 
     # Run the test.
     output = ''
     if before_pids:
       output = '\n'.join(self._LaunchMonkeyTest())
-      after_pids = self.adb.ExtractPid(self._package)
+      after_pids = self.device.GetPids(self._package)
 
     crashed = True
-    if not before_pids:
+    if not self._package in before_pids:
       logging.error('Failed to start the process.')
-    elif not after_pids:
-      logging.error('Process %s has died.', before_pids[0])
-    elif before_pids[0] != after_pids[0]:
+    elif not self._package in after_pids:
+      logging.error('Process %s has died.', before_pids[self._package])
+    elif before_pids[self._package] != after_pids[self._package]:
       logging.error('Detected process restart %s -> %s',
-                    before_pids[0], after_pids[0])
+                    before_pids[self._package], after_pids[self._package])
     else:
       crashed = False
 
@@ -89,7 +88,7 @@ class TestRunner(base_test_runner.BaseTestRunner):
       if 'chrome' in self._options.package:
         logging.warning('Starting MinidumpUploadService...')
         try:
-          self.adb.StartCrashUploadService(self._package)
+          self.device.old_interface.StartCrashUploadService(self._package)
         except AssertionError as e:
           logging.error('Failed to start MinidumpUploadService: %s', e)
     results.AddResult(result)

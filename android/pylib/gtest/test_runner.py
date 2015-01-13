@@ -6,11 +6,12 @@ import logging
 import os
 import re
 
-from pylib import android_commands
-from pylib import constants
 from pylib import pexpect
+from pylib import ports
 from pylib.base import base_test_result
 from pylib.base import base_test_runner
+from pylib.device import device_errors
+from pylib.local import local_test_server_spawner
 from pylib.perf import perf_control
 
 
@@ -37,7 +38,6 @@ class TestRunner(base_test_runner.BaseTestRunner):
     """
 
     super(TestRunner, self).__init__(device, test_options.tool,
-                                     test_options.push_deps,
                                      test_options.cleanup_test_files)
 
     self.test_package = test_package
@@ -53,31 +53,18 @@ class TestRunner(base_test_runner.BaseTestRunner):
 
     self._timeout = timeout * self.tool.GetTimeoutScale()
     if _TestSuiteRequiresHighPerfMode(self.test_package.suite_name):
-      self._perf_controller = perf_control.PerfControl(self.adb)
+      self._perf_controller = perf_control.PerfControl(self.device)
+
+    if _TestSuiteRequiresMockTestServer(self.test_package.suite_name):
+      self._servers = [
+          local_test_server_spawner.LocalTestServerSpawner(
+              ports.AllocateTestServerPort(), self.device, self.tool)]
+    else:
+      self._servers = []
 
   #override
   def InstallTestPackage(self):
-    self.test_package.Install(self.adb)
-
-  def GetAllTests(self):
-    """Install test package and get a list of all tests."""
-    self.test_package.Install(self.adb)
-    return self.test_package.GetAllTests(self.adb)
-
-  #override
-  def PushDataDeps(self):
-    self.adb.WaitForSdCardReady(20)
-    self.tool.CopyFiles()
-    if os.path.exists(constants.ISOLATE_DEPS_DIR):
-      device_dir = self.adb.GetExternalStorage()
-      # TODO(frankf): linux_dumper_unittest_helper needs to be in the same dir
-      # as breakpad_unittests exe. Find a better way to do this.
-      if self.test_package.suite_name == 'breakpad_unittests':
-        device_dir = constants.TEST_EXECUTABLE_DIR
-      for p in os.listdir(constants.ISOLATE_DEPS_DIR):
-        self.adb.PushIfNeeded(
-            os.path.join(constants.ISOLATE_DEPS_DIR, p),
-            os.path.join(device_dir, p))
+    self.test_package.Install(self.device)
 
   def _ParseTestOutput(self, p):
     """Process the test output.
@@ -91,21 +78,22 @@ class TestRunner(base_test_runner.BaseTestRunner):
     results = base_test_result.TestRunResults()
 
     # Test case statuses.
-    re_run = re.compile('\[ RUN      \] ?(.*)\r\n')
-    re_fail = re.compile('\[  FAILED  \] ?(.*)\r\n')
-    re_ok = re.compile('\[       OK \] ?(.*?) .*\r\n')
+    re_run = re.compile('\\[ RUN      \\] ?(.*)\r\n')
+    re_fail = re.compile('\\[  FAILED  \\] ?(.*?)( \\((\\d+) ms\\))?\r\r\n')
+    re_ok = re.compile('\\[       OK \\] ?(.*?)( \\((\\d+) ms\\))?\r\r\n')
 
     # Test run statuses.
-    re_passed = re.compile('\[  PASSED  \] ?(.*)\r\n')
-    re_runner_fail = re.compile('\[ RUNNER_FAILED \] ?(.*)\r\n')
+    re_passed = re.compile('\\[  PASSED  \\] ?(.*)\r\n')
+    re_runner_fail = re.compile('\\[ RUNNER_FAILED \\] ?(.*)\r\n')
     # Signal handlers are installed before starting tests
     # to output the CRASHED marker when a crash happens.
-    re_crash = re.compile('\[ CRASHED      \](.*)\r\n')
+    re_crash = re.compile('\\[ CRASHED      \\](.*)\r\n')
 
     log = ''
     try:
       while True:
         full_test_name = None
+
         found = p.expect([re_run, re_passed, re_runner_fail],
                          timeout=self._timeout)
         if found == 1:  # re_passed
@@ -118,24 +106,27 @@ class TestRunner(base_test_runner.BaseTestRunner):
           log = p.before.replace('\r', '')
           if found == 0:  # re_ok
             if full_test_name == p.match.group(1).replace('\r', ''):
+              duration_ms = int(p.match.group(3)) if p.match.group(3) else 0
               results.AddResult(base_test_result.BaseTestResult(
                   full_test_name, base_test_result.ResultType.PASS,
-                  log=log))
+                  duration=duration_ms, log=log))
           elif found == 2:  # re_crash
             results.AddResult(base_test_result.BaseTestResult(
                 full_test_name, base_test_result.ResultType.CRASH,
                 log=log))
             break
           else:  # re_fail
+            duration_ms = int(p.match.group(3)) if p.match.group(3) else 0
             results.AddResult(base_test_result.BaseTestResult(
-                full_test_name, base_test_result.ResultType.FAIL, log=log))
+                full_test_name, base_test_result.ResultType.FAIL,
+                duration=duration_ms, log=log))
     except pexpect.EOF:
       logging.error('Test terminated - EOF')
       # We're here because either the device went offline, or the test harness
       # crashed without outputting the CRASHED marker (crbug.com/175538).
-      if not self.adb.IsOnline():
-        raise android_commands.errors.DeviceUnresponsiveError(
-            'Device %s went offline.' % self.device)
+      if not self.device.IsOnline():
+        raise device_errors.DeviceUnreachableError(
+            'Device %s went offline.' % str(self.device))
       if full_test_name:
         results.AddResult(base_test_result.BaseTestResult(
             full_test_name, base_test_result.ResultType.CRASH,
@@ -150,7 +141,7 @@ class TestRunner(base_test_runner.BaseTestRunner):
     finally:
       p.close()
 
-    ret_code = self.test_package.GetGTestReturnCode(self.adb)
+    ret_code = self.test_package.GetGTestReturnCode(self.device)
     if ret_code:
       logging.critical(
           'gtest exit code: %d\npexpect.before: %s\npexpect.after: %s',
@@ -165,13 +156,14 @@ class TestRunner(base_test_runner.BaseTestRunner):
       return test_results, None
 
     try:
-      self.test_package.ClearApplicationState(self.adb)
+      self.test_package.ClearApplicationState(self.device)
       self.test_package.CreateCommandLineFileOnDevice(
-          self.adb, test, self._test_arguments)
+          self.device, test, self._test_arguments)
       test_results = self._ParseTestOutput(
-          self.test_package.SpawnTestProcess(self.adb))
+          self.test_package.SpawnTestProcess(self.device))
     finally:
-      self.CleanupSpawningServerState()
+      for s in self._servers:
+        s.Reset()
     # Calculate unknown test results.
     all_tests = set(test.split(':'))
     all_tests_ran = set([t.GetName() for t in test_results.GetAll()])
@@ -186,8 +178,8 @@ class TestRunner(base_test_runner.BaseTestRunner):
   def SetUp(self):
     """Sets up necessary test enviroment for the test suite."""
     super(TestRunner, self).SetUp()
-    if _TestSuiteRequiresMockTestServer(self.test_package.suite_name):
-      self.LaunchChromeTestServerSpawner()
+    for s in self._servers:
+      s.SetUp()
     if _TestSuiteRequiresHighPerfMode(self.test_package.suite_name):
       self._perf_controller.SetHighPerfMode()
     self.tool.SetupEnvironment()
@@ -195,8 +187,10 @@ class TestRunner(base_test_runner.BaseTestRunner):
   #override
   def TearDown(self):
     """Cleans up the test enviroment for the test suite."""
+    for s in self._servers:
+      s.TearDown()
     if _TestSuiteRequiresHighPerfMode(self.test_package.suite_name):
-      self._perf_controller.RestoreOriginalPerfMode()
-    self.test_package.ClearApplicationState(self.adb)
+      self._perf_controller.SetDefaultPerfMode()
+    self.test_package.ClearApplicationState(self.device)
     self.tool.CleanUpEnvironment()
     super(TestRunner, self).TearDown()
