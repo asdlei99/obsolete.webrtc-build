@@ -614,6 +614,9 @@
       # Enable hole punching for the protected video.
       'video_hole%': 0,
 
+      # Host OS name - used for Android cross-compile build.
+      'host_os%': '',
+
       # Automatically select platforms under ozone. Turn this off to
       # build only explicitly selected platforms.
       'ozone_auto_platforms%': 1,
@@ -751,6 +754,7 @@
           'enable_print_preview%': 0,
           'enable_task_manager%':0,
           'video_hole%': 1,
+          'host_os%': "<!(uname -s | sed -e 's/Linux/linux/;s/Darwin/mac/')",
         }],
 
         # Android OS includes support for proprietary codecs regardless of
@@ -1202,6 +1206,7 @@
     'use_lto%': '<(use_lto)',
     'use_lto_o2%': '<(use_lto_o2)',
     'video_hole%': '<(video_hole)',
+    'host_os%': '<(host_os)',
     'support_pre_M6_history_database%': '<(support_pre_M6_history_database)',
     'v8_use_external_startup_data%': '<(v8_use_external_startup_data)',
 
@@ -1466,7 +1471,7 @@
     'use_brlapi%': 0,
 
     # Relative path to icu.gyp from this file.
-    'icu_gyp_path': '../third_party/icu/icu.gyp',
+    #'icu_gyp_path': '../third_party/icu/icu.gyp',
 
     # IPC fuzzer is disabled by default.
     'enable_ipc_fuzzer%': 0,
@@ -1513,7 +1518,7 @@
         'syzygy_optimize%': 0,
       }],
       # Get binutils version so we can enable debug fission if we can.
-      ['os_posix==1 and OS!="mac" and OS!="ios"', {
+      ['os_posix==1 and host_os!="mac" and OS!="mac" and OS!="ios"', {
         'conditions': [
           # compiler_version doesn't work with clang
           # TODO(mithro): Land https://codereview.chromium.org/199793014/ so
@@ -1665,14 +1670,20 @@
             # Android API-level of the SDK used for compilation.
             'android_sdk_version%': '21',
             'android_sdk_build_tools_version%': '21.0.1',
-            'host_os%': "<!(uname -s | sed -e 's/Linux/linux/;s/Darwin/mac/')",
+            
+            'conditions': [
+              ['host_os=="mac"', {
+                'host_os_name%': 'darwin',
+              }, {
+                'host_os_name%': '<(host_os)',
+              }],
+            ],
           },
           # Copy conditionally-set variables out one scope.
           'android_ndk_root%': '<(android_ndk_root)',
           'android_sdk_root%': '<(android_sdk_root)',
           'android_sdk_version%': '<(android_sdk_version)',
           'android_stlport_root': '<(android_ndk_root)/sources/cxx-stl/stlport',
-          'host_os%': '<(host_os)',
 
           'android_sdk%': '<(android_sdk_root)/platforms/android-<(android_sdk_version)',
           # Android SDK build tools (e.g. dx, aapt, aidl)
@@ -1687,14 +1698,14 @@
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-x86/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-x86',
               'android_ndk_lib_dir%': 'usr/lib',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/x86-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/x86-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch == "x64"', {
               'android_app_abi%': 'x86_64',
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-x86_64/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-21/arch-x86_64',
               'android_ndk_lib_dir%': 'usr/lib64',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/x86_64-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/x86_64-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch=="arm"', {
               'conditions': [
@@ -1707,28 +1718,28 @@
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-arm/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-arm',
               'android_ndk_lib_dir%': 'usr/lib',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch == "arm64"', {
               'android_app_abi%': 'arm64-v8a',
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-arm64/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-21/arch-arm64',
               'android_ndk_lib_dir%': 'usr/lib',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/aarch64-linux-android-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/aarch64-linux-android-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch == "mipsel"', {
               'android_app_abi%': 'mips',
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-mips/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-mips',
               'android_ndk_lib_dir%': 'usr/lib',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/mipsel-linux-android-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/mipsel-linux-android-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch == "mips64el"', {
               'android_app_abi%': 'mips64',
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-mips64/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-21/arch-mips64',
               'android_ndk_lib_dir%': 'usr/lib64',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/mips64el-linux-android-4.9/prebuilt/<(host_os)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/mips64el-linux-android-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
               'gcc_version%': 49,
             }],
           ],
@@ -1751,7 +1762,6 @@
         'android_stlport_root': '<(android_stlport_root)',
         'android_stlport_include': '<(android_stlport_root)/stlport',
         'android_stlport_libs_dir': '<(android_stlport_root)/libs/<(android_app_abi)',
-        'host_os%': '<(host_os)',
 
         # Location of the "objcopy" binary, used by both gyp and scripts.
         'android_objcopy%' : '<!(/bin/echo -n <(android_toolchain)/*-objcopy)',

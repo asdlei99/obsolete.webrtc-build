@@ -24,7 +24,7 @@
       },
     }, {
       'dependencies': [
-        '<(android_ndk_root)/android_tools_ndk.gyp:cpu_features',
+        '<(DEPTH)/third_party/android_tools/ndk/android_tools_ndk.gyp:cpu_features',
       ],
     }],
   ],
