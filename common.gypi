@@ -1683,7 +1683,7 @@
           'android_ndk_root%': '<(android_ndk_root)',
           'android_sdk_root%': '<(android_sdk_root)',
           'android_sdk_version%': '<(android_sdk_version)',
-          'android_stlport_root': '<(android_ndk_root)/sources/cxx-stl/stlport',
+          'android_gnustl_root': '<(android_ndk_root)/sources/cxx-stl/gnu-libstdc++/4.7',
 
           'android_sdk%': '<(android_sdk_root)/platforms/android-<(android_sdk_version)',
           # Android SDK build tools (e.g. dx, aapt, aidl)
@@ -1718,7 +1718,7 @@
               'android_gdbserver%': '<(android_ndk_root)/prebuilt/android-arm/gdbserver/gdbserver',
               'android_ndk_sysroot%': '<(android_ndk_root)/platforms/android-14/arch-arm',
               'android_ndk_lib_dir%': 'usr/lib',
-              'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.9/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
+              'android_toolchain%': '<(android_ndk_root)/toolchains/arm-linux-androideabi-4.7/prebuilt/<(host_os_name)-<(android_host_arch)/bin',
             }],
             ['target_arch == "arm64"', {
               'android_app_abi%': 'arm64-v8a',
@@ -1759,9 +1759,10 @@
         'android_sdk%': '<(android_sdk)',
         'android_sdk_jar%': '<(android_sdk)/android.jar',
 
-        'android_stlport_root': '<(android_stlport_root)',
-        'android_stlport_include': '<(android_stlport_root)/stlport',
-        'android_stlport_libs_dir': '<(android_stlport_root)/libs/<(android_app_abi)',
+        'android_gnustl_root': '<(android_gnustl_root)',
+        'android_gnustl_include': '<(android_gnustl_root)/include',
+        'android_gnustl_platform_include': '<(android_gnustl_root)/libs/<(android_app_abi)/include',
+        'android_gnustl_libs_dir': '<(android_gnustl_root)/libs/<(android_app_abi)',
 
         # Location of the "objcopy" binary, used by both gyp and scripts.
         'android_objcopy%' : '<!(/bin/echo -n <(android_toolchain)/*-objcopy)',
@@ -4455,9 +4456,9 @@
           # Figure this out early since it needs symbols from libgcc.a, so it
           # has to be before that in the set of libraries.
           ['component=="shared_library"', {
-              'android_stlport_library': 'stlport_shared',
+              'android_gnustl_library': 'gnustl_shared',
           }, {
-              'android_stlport_library': 'stlport_static',
+              'android_gnustl_library': 'gnustl_static',
           }],
         ],
 
@@ -4541,7 +4542,6 @@
             'defines': [
               'ANDROID',
               '__GNU_SOURCE=1',  # Necessary for clone()
-              'USE_STLPORT=1',
               '_STLP_USE_PTR_SPECIALIZATIONS=1',
               'CHROME_BUILD_ID="<(chrome_build_id)"',
             ],
@@ -4616,7 +4616,7 @@
                   '-nostdlib',
                 ],
                 'libraries': [
-                  '-l<(android_stlport_library)',
+                  '-l<(android_gnustl_library)',
                   # Manually link the libgcc.a that the cross compiler uses.
                   '<!(<(android_toolchain)/*-gcc -print-libgcc-file-name)',
                   '-lc',
@@ -4673,7 +4673,7 @@
                   '-Wl,--icf=safe',
                 ],
               }],
-              # NOTE: The stlport header include paths below are specified in
+              # NOTE: The gnustl header include paths below are specified in
               # cflags rather than include_dirs because they need to come
               # after include_dirs. Think of them like system headers, but
               # don't use '-isystem' because the arm-linux-androideabi-4.4.3
@@ -4681,17 +4681,18 @@
               # The include ordering here is important; change with caution.
               ['android_webview_build==0', {
                 'cflags': [
-                  '-isystem<(android_stlport_include)',
+                  '-isystem<(android_gnustl_include)',
+                  '-isystem<(android_gnustl_platform_include)',
                 ],
                 'ldflags': [
-                  '-L<(android_stlport_libs_dir)',
+                  '-L<(android_gnustl_libs_dir)',
                 ],
               }, { # else: android_webview_build!=0
                 'aosp_build_settings': {
-                  # Specify that we want to statically link stlport from the
+                  # Specify that we want to statically link gnustl from the
                   # NDK. This will provide all the include and library paths
                   # automatically at build time, and link the right library.
-                  'LOCAL_NDK_STL_VARIANT': 'stlport_static',
+                  'LOCAL_NDK_STL_VARIANT': 'gnustl_static',
                 },
               }],
               ['target_arch=="ia32"', {
