@@ -113,6 +113,16 @@ declare_args() {
     # toolchains.
     cros_use_custom_toolchain = false
   }
+
+  if (current_os == "win") {
+    # On Windows the runtime can either be "win32" or "winrt"
+    target_runtime = "win32"
+
+    # When target_runtime is "winrt" this can either be:
+    # "pc" or "phone".
+    # In the future an additional family will be supported for Win10.
+    target_winrt_family = ""
+  }
 }
 
 # TODO(dpranke): Remove these asserts when os and cpu_arch are removed.
@@ -355,6 +365,11 @@ if (is_win) {
     "//build/config/win:sdk",
     "//build/config/win:unicode",
     "//build/config/win:winver",
+  ]
+}
+if (is_win && target_runtime == "winrt") {
+  _native_compiler_configs += [
+    "//build/config/win:target_winrt",
   ]
 }
 if (is_posix) {

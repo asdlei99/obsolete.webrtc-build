@@ -536,11 +536,17 @@ config("runtime_library") {
     }
   } else {
     # Static CRT.
-    if (is_win) {
+    if (is_win && target_runtime == "win32") {
       if (is_debug) {
         cflags += [ "/MTd" ]
       } else {
         cflags += [ "/MT" ]
+      }
+    } else if (is_win && target_runtime == "winrt") {
+      if (is_debug) {
+        cflags += [ "/MDd" ]
+      } else {
+        cflags += [ "/MD" ]
       }
     }
   }

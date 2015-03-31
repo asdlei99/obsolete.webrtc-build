@@ -356,6 +356,11 @@
       # Enable with GYP_DEFINES=win_analyze=1
       'win_analyze%': 0,
 
+      # Windows Runtime platform is win by default.
+      # Possible values are: win (for Windows 8.1) and win_phone (for Windows 8.1 Phone)
+      # set with GYP_DEFINES=winrt_platform=win_phone
+      'winrt_platform%': 'win',
+
       # Set to select the Title Case versions of strings in GRD files.
       'use_titlecase_in_grd%': 0,
 
@@ -1125,6 +1130,7 @@
     'system_libdir%': '<(system_libdir)',
     'component%': '<(component)',
     'win_analyze%': '<(win_analyze)',
+    'winrt_platform%': '<(winrt_platform)',
     'enable_resource_whitelist_generation%': '<(enable_resource_whitelist_generation)',
     'use_titlecase_in_grd%': '<(use_titlecase_in_grd)',
     'use_third_party_translations%': '<(use_third_party_translations)',
@@ -1229,8 +1235,11 @@
     # Use system protobuf instead of bundled one.
     'use_system_protobuf%': 0,
 
-    # Use system yasm instead of bundled one.
+    # Set to 1 to use system yasm instead of bundled one.
     'use_system_yasm%': 0,
+
+    # set to 1 to use pre_built yasm instead of bundled one or the system one.
+    'use_prebuilt_yasm%': 0,
 
     # Use system ICU instead of bundled one.
     'use_system_icu%' : 0,
@@ -1602,6 +1611,10 @@
       }],
       ['OS=="win"', {
         'windows_driver_kit_path%': '$(WDK_DIR)',
+      }],
+      ['OS=="win" and OS_RUNTIME=="winrt"', {
+        # On WinRT we'll have a unit test UI app.
+        'gtest_target_type%': 'static_library',
       }],
       ['os_posix==1 and OS!="mac" and OS!="ios"', {
         'conditions': [
@@ -2535,6 +2548,11 @@
           'win_release_RuntimeLibrary%': '0', # 0 = /MT (nondebug static)
           'win_debug_RuntimeLibrary%': '1',   # 1 = /MTd (debug static)
         }],
+        ['OS=="win" and OS_RUNTIME=="winrt"', {
+          # WinRT only support the DLL runtime.
+          'win_release_RuntimeLibrary%': '2', # 2 = /MD (nondebug DLL)
+          'win_debug_RuntimeLibrary%': '3',   # 3 = /MDd (debug DLL)
+        }],
         ['OS=="ios"', {
           # See http://gcc.gnu.org/onlinedocs/gcc-4.4.2/gcc/Optimize-Options.html
           'mac_release_optimization%': 's', # Use -Os unless overridden
@@ -2896,6 +2914,22 @@
           }],  # win_analyze
         ],
       }],  # OS==win
+      ['OS=="win" and OS_RUNTIME=="winrt"', {
+        'defines': [
+          'WINRT',
+          '_HAS_EXCEPTIONS=1',
+          'WINAPI_FAMILY=WINAPI_FAMILY_APP',
+        ],
+        'msvs_settings': {
+          'VCLibrarianTool': {
+            'AdditionalOptions': ["/IGNORE:4264"],
+          },
+          'VCCLCompilerTool': {
+            'CompileAsWinRT': 'true',
+            'ExceptionHandling': '1',
+          }
+        }
+      }],  # OS==win
       ['chromecast==1', {
         'defines': [
           'LOG_DISABLED=0',
@@ -3195,33 +3229,85 @@
           'CharacterSet': '1',
         },
         # Add the default import libs.
-        'msvs_settings':{
-          'VCLinkerTool': {
-            'AdditionalDependencies': [
-              'kernel32.lib',
-              'gdi32.lib',
-              'winspool.lib',
-              'comdlg32.lib',
-              'advapi32.lib',
-              'shell32.lib',
-              'ole32.lib',
-              'oleaut32.lib',
-              'user32.lib',
-              'uuid.lib',
-              'odbc32.lib',
-              'odbccp32.lib',
-              'delayimp.lib',
-              'credui.lib',
-              'netapi32.lib',
-            ],
-            'AdditionalOptions': [
-              # Suggested by Microsoft Devrel to avoid
-              #   LINK : fatal error LNK1248: image size (80000000) exceeds maximum allowable size (80000000)
-              # which started happening more regularly after VS2013 Update 4.
-              '/maxilksize:2147483647',
-            ],
-          },
-        },
+        'conditions':[
+            ['OS_RUNTIME=="winrt"', {
+              'msvs_configuration_attributes': {
+                # Explicitly relative to the project directory.  WinRT deploy doesn't work without.
+                'OutputDirectory': '$(ProjectDir)<(DEPTH)\\build\\<(build_dir_prefix)$(ConfigurationName)',
+              },
+              'msvs_settings':{
+                'VCLinkerTool': {
+                  'conditions': [
+                    ['winrt_platform=="win_phone"', {
+                      'AdditionalDependencies': [
+                        'WindowsPhoneCore.lib',
+                        'RuntimeObject.lib',
+                        'PhoneAppModelHost.lib',
+                        '%(AdditionalDependencies)',
+                      ],
+											'IgnoreDefaultLibraryNames': [
+												'winmm.lib',
+												'Iphlpapi.lib',
+												'kernel32.lib',
+												'ole32.lib',
+												'%(IgnoreSpecificDefaultLibraries)',
+											]}, {
+                      'AdditionalDependencies': [
+                        'kernel32.lib',
+                        'gdi32.lib',
+                        'winspool.lib',
+                        'comdlg32.lib',
+                        'advapi32.lib',
+                        'shell32.lib',
+                        'ole32.lib',
+                        'oleaut32.lib',
+                        'user32.lib',
+                        'uuid.lib',
+                        'odbc32.lib',
+                        'odbccp32.lib',
+                        'credui.lib',
+                        'netapi32.lib',
+                       ],
+                      }],
+                    ],
+                   'AdditionalOptions': [
+                    # Suggested by Microsoft Devrel to avoid
+                    #   LINK : fatal error LNK1248: image size (80000000) exceeds maximum allowable size (80000000)
+                    # which started happening more regularly after VS2013 Update 4.
+                    '/maxilksize:1879048192', #0x70000000
+                  ],
+                },
+              },
+            }, {
+              'msvs_settings':{
+                'VCLinkerTool': {
+                  'AdditionalDependencies': [
+                    'kernel32.lib',
+                    'gdi32.lib',
+                    'winspool.lib',
+                    'comdlg32.lib',
+                    'advapi32.lib',
+                    'shell32.lib',
+                    'ole32.lib',
+                    'oleaut32.lib',
+                    'user32.lib',
+                    'uuid.lib',
+                    'odbc32.lib',
+                    'odbccp32.lib',
+                    'delayimp.lib',
+                    'credui.lib',
+                    'netapi32.lib',
+                  ],
+                  'AdditionalOptions': [
+                    # Suggested by Microsoft Devrel to avoid
+                    #   LINK : fatal error LNK1248: image size (80000000) exceeds maximum allowable size (80000000)
+                    # which started happening more regularly after VS2013 Update 4.
+                    '/maxilksize:2147483647', #0x7FFFFFFF
+                  ],
+                },
+              },
+            }]
+        ],
       },
       'x86_Base': {
         'abstract': 1,
@@ -3536,13 +3622,26 @@
           },
         }],
         [ 'OS=="win"', {
-          # TODO(bradnelson): add a gyp mechanism to make this more graceful.
-          'Debug_x64': {
-            'inherit_from': ['Common_Base', 'x64_Base', 'Debug_Base'],
-          },
-          'Release_x64': {
-            'inherit_from': ['Common_Base', 'x64_Base', 'Release_Base'],
-          },
+          'conditions': [
+            ['OS_RUNTIME=="winrt"', {
+              'Debug_ARM': {
+                'inherit_from': ['Common_Base', 'Debug_Base', 'ARM_Base'],
+              },
+              'Release_ARM': {
+                'inherit_from': ['Common_Base', 'Release_Base', 'ARM_Base'],
+              },
+            }],
+            # There is none Windwos 8.1 Phone x64
+            ['winrt_platform!="win_phone"', {
+              # TODO(bradnelson): add a gyp mechanism to make this more graceful.
+              'Debug_x64': {
+                'inherit_from': ['Common_Base', 'x64_Base', 'Debug_Base'],
+              },
+              'Release_x64': {
+                'inherit_from': ['Common_Base', 'x64_Base', 'Release_Base'],
+              },
+            }],
+          ],
         }],
       ],
     },
@@ -5382,24 +5481,34 @@
     ['OS=="win"', {
       'target_defaults': {
         'defines': [
+          'NOMINMAX',
+          'WIN32',
           '_WIN32_WINNT=0x0603',
           'WINVER=0x0603',
-          'WIN32',
-          '_WINDOWS',
-          'NOMINMAX',
-          'PSAPI_VERSION=1',
-          '_CRT_RAND_S',
-          'CERT_CHAIN_PARA_HAS_EXTRA_FIELDS',
-          'WIN32_LEAN_AND_MEAN',
-          '_ATL_NO_OPENGL',
-          '_SECURE_ATL',
-          # _HAS_EXCEPTIONS must match ExceptionHandling in msvs_settings.
-          '_HAS_EXCEPTIONS=0',
-          # Silence some warnings; we can't switch the the 'recommended'
-          # versions as they're not available on old OSs.
-          '_WINSOCK_DEPRECATED_NO_WARNINGS',
         ],
         'conditions': [
+          ['OS_RUNTIME=="winrt" and winrt_platform=="win_phone"', {
+            'defines': [
+              'PSAPI_VERSION=2',
+              'WINAPI_FAMILY=WINAPI_FAMILY_PHONE_APP',
+              '_UITHREADCTXT_SUPPORT=0',
+            ],
+          },{
+            'defines': [
+              '_WINDOWS',
+              'PSAPI_VERSION=1',
+              '_CRT_RAND_S',
+              'CERT_CHAIN_PARA_HAS_EXTRA_FIELDS',
+              'WIN32_LEAN_AND_MEAN',
+              '_ATL_NO_OPENGL',
+              '_SECURE_ATL',
+              # _HAS_EXCEPTIONS must match ExceptionHandling in msvs_settings.
+              '_HAS_EXCEPTIONS=0',
+              # Silence some warnings; we can't switch the the 'recommended'
+              # versions as they're not available on old OSs.
+              '_WINSOCK_DEPRECATED_NO_WARNINGS',
+            ],
+          }],
           ['buildtype=="Official"', {
               # In official builds, targets can self-select an optimization
               # level by defining a variable named 'optimize', and setting it
@@ -5557,37 +5666,56 @@
           },
           'VCLibrarianTool': {
             'AdditionalOptions': ['/ignore:4221'],
-            'AdditionalLibraryDirectories': [
-              '<(windows_sdk_path)/Lib/win8/um/x86',
+            'conditions': [
+              ['OS_RUNTIME!="winrt" and winrt_platform!="win_phone"', {
+                'AdditionalLibraryDirectories': [
+                  '<(windows_sdk_path)/Lib/win8/um/x86',
+                ],
+              }],
             ],
           },
           'VCLinkerTool': {
-            'AdditionalDependencies': [
-              'wininet.lib',
-              'dnsapi.lib',
-              'version.lib',
-              'msimg32.lib',
-              'ws2_32.lib',
-              'usp10.lib',
-              'psapi.lib',
-              'dbghelp.lib',
-              'winmm.lib',
-              'shlwapi.lib',
+            'conditions': [
+              ['OS_RUNTIME=="winrt" and winrt_platform=="win_phone"', {
+                'AdditionalDependencies': [
+                  'ws2_32.lib',
+                ],
+                  # SubSystem values:
+                  # 0 == not set
+                  # 1 == /SUBSYSTEM:CONSOLE
+                  # 2 == /SUBSYSTEM:WINDOWS
+                  # Most of the executables we'll ever create are tests
+                  # and utilities with console output.
+                  'SubSystem': '2',
+                }, {
+                'AdditionalDependencies': [
+                  'wininet.lib',
+                  'dnsapi.lib',
+                  'version.lib',
+                  'msimg32.lib',
+                  'ws2_32.lib',
+                  'usp10.lib',
+                  'psapi.lib',
+                  'dbghelp.lib',
+                  'winmm.lib',
+                  'shlwapi.lib',			
+                ],
+                # SubSystem values:
+                #   0 == not set
+                #   1 == /SUBSYSTEM:CONSOLE
+                #   2 == /SUBSYSTEM:WINDOWS
+                # Most of the executables we'll ever create are tests
+                # and utilities with console output.
+                'SubSystem': '1',
+              }],
             ],
-            'AdditionalLibraryDirectories': [
-              '<(windows_sdk_path)/Lib/win8/um/x86',
-            ],
+            #'AdditionalLibraryDirectories': [
+            #  '<(windows_sdk_path)/Lib/win8/um/x86',
+            #],
             'GenerateDebugInformation': 'true',
             'MapFileName': '$(OutDir)\\$(TargetName).map',
             'ImportLibrary': '$(OutDir)\\lib\\$(TargetName).lib',
             'FixedBaseAddress': '1',
-            # SubSystem values:
-            #   0 == not set
-            #   1 == /SUBSYSTEM:CONSOLE
-            #   2 == /SUBSYSTEM:WINDOWS
-            # Most of the executables we'll ever create are tests
-            # and utilities with console output.
-            'SubSystem': '1',
           },
           'VCMIDLTool': {
             'GenerateStublessProxies': 'true',
@@ -5620,7 +5748,7 @@
             }],
           ],
           'conditions': [
-            # Building with Clang on Windows is a work in progress and very
+        # Building with Clang on Windows is a work in progress and very
             # experimental. See crbug.com/82385.
             ['clang==1', {
               'VCCLCompilerTool': {
@@ -5687,15 +5815,25 @@
         ],
       },
     }],
+    ['OS_RUNTIME=="winrt" and winrt_platform=="win_phone"', {
+      'target_defaults': {
+        'msvs_enable_winrt': 1,
+        'msvs_enable_winphone': 1,
+      },
+    }],
     ['OS=="win" and msvs_use_common_linker_extras', {
       'target_defaults': {
         'msvs_settings': {
           'VCLinkerTool': {
-            'DelayLoadDLLs': [
-              'dbghelp.dll',
-              'dwmapi.dll',
-              'shell32.dll',
-              'uxtheme.dll',
+            'conditions': [
+              ['OS_RUNTIME!="winrt" and winrt_platform!="win_phone"', {
+                'DelayLoadDLLs': [
+                  'dbghelp.dll',
+                  'dwmapi.dll',
+                  'shell32.dll',
+                  'uxtheme.dll',
+                ],
+              }],
             ],
           },
         },
@@ -5779,6 +5917,15 @@
                   '/nxcompat',
                 ],
               },
+            },
+          },
+          'ARM_Base': {
+            'abstract': 1,
+            'msvs_configuration_platform': 'ARM', 
+            'msvs_settings': {
+              'VCLinkerTool': {
+                'RandomizedBaseAddress': 2,
+              }
             },
           },
         },
